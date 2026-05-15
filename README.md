@@ -1,6 +1,7 @@
 # 🤖 Local LLM Chatbot — with PromptFoo Adversarial Testing
 
 A simple chatbot application powered by a locally running LLM, with built-in security guardrails and a comprehensive adversarial test suite using [PromptFoo](https://www.promptfoo.dev/).
+the detailed writeup on https://manishpandey.co.in/red-teaming-generative-ai-why-language-is-the-new-exploit-vector/
 
 > **Purpose**: Demonstrate how to build, secure, and red-team test an LLM-powered application end-to-end.
 
