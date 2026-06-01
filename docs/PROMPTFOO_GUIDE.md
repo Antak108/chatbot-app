@@ -1,4 +1,6 @@
-# 🧪 PromptFoo — Installation, Configuration & Usage Guide
+# PromptFoo — Adversarial Testing Guide
+
+> **Note**: PromptFoo is run **manually** and is **not part of CI**. It requires a live local LLM, which GitHub Actions runners don't have. Use it locally whenever you change the guardrails or the LLM integration.
 
 ## What Is PromptFoo?
 
