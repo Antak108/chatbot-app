@@ -983,6 +983,140 @@ body {
 .msg-react:hover { opacity: 1; background: var(--bg-glass); }
 .msg-react.active { opacity: 1; background: var(--accent-surface); border-color: var(--accent); }
 
+/* ── Command palette + shortcuts modal ───────────────────────────── */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18vh;
+  backdrop-filter: blur(4px);
+}
+.palette-backdrop.hidden { display: none; }
+.palette {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  width: 90%;
+  max-width: 520px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+}
+.palette input {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 16px;
+  padding: 16px 20px;
+  outline: none;
+}
+.palette ul {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+  overflow-y: auto;
+}
+.palette li {
+  padding: 10px 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.palette li.active,
+.palette li:hover {
+  background: var(--bg-glass-hover);
+}
+.palette li .cmd-name { font-family: ui-monospace, monospace; }
+.palette li .cmd-desc { color: var(--text-muted); font-size: 12px; }
+.palette-hint {
+  padding: 8px 20px;
+  border-top: 1px solid var(--border-glass);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.palette-close {
+  display: block;
+  margin: 12px auto 16px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  padding: 6px 18px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+}
+.palette-close:hover { background: var(--bg-glass-hover); }
+
+/* ── Shortcuts table ─────────────────────────────────────────────── */
+.shortcuts {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 20px 24px 16px;
+  width: 90%;
+  max-width: 460px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  color: var(--text-primary);
+}
+.shortcuts h3 { margin: 0 0 12px; font-size: 16px; }
+.shortcuts table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.shortcuts td { padding: 6px 8px; vertical-align: top; }
+.shortcuts td:first-child { width: 45%; }
+kbd {
+  display: inline-block;
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-primary);
+  margin: 0 2px;
+}
+
+/* ── Slash command autocomplete ──────────────────────────────────── */
+.slash-menu {
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: 76px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 50;
+  padding: 4px 0;
+}
+.slash-menu.hidden { display: none; }
+.slash-menu .slash-item {
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-primary);
+}
+.slash-menu .slash-item.active,
+.slash-menu .slash-item:hover { background: var(--bg-glass-hover); }
+.slash-menu .slash-item .name { font-family: ui-monospace, monospace; color: var(--accent); }
+.slash-menu .slash-item .desc { color: var(--text-muted); font-size: 12px; }
+
 /* ── Math (KaTeX) ────────────────────────────────────────────────── */
 .msg .katex { font-size: 1.05em; }
 .msg .katex-display {

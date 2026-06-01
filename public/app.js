@@ -600,7 +600,17 @@ if (quickPrompts) {
 
 // ── Keyboard ────────────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
+  // Global: '?' shows shortcuts (only when not typing in an input/textarea)
+  const isTyping = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') && !paletteBackdrop.classList.contains('hidden') === false && !shortcutsBackdrop.classList.contains('hidden') === false;
+  if (e.key === '?' && !isTyping) {
+    e.preventDefault();
+    openShortcuts();
+    return;
+  }
+  // Escape closes any open panel
   if (e.key === 'Escape') {
+    if (!paletteBackdrop.classList.contains('hidden')) { closePalette(); return; }
+    if (!shortcutsBackdrop.classList.contains('hidden')) { closeShortcuts(); return; }
     closeSidebar();
     settingsPanel.classList.remove('open');
     if (!sidebarSearchWrap.classList.contains('hidden')) {
@@ -609,19 +619,69 @@ document.addEventListener('keydown', (e) => {
       sessionFilter = '';
       renderSessionList();
     }
+    hideSlashMenu();
   }
-  // Ctrl/Cmd+K: focus search
-  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+  // Ctrl/Cmd+K: command palette
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
-    sidebarSearchWrap.classList.remove('hidden');
-    sidebarSearch.focus();
+    openPalette();
+    return;
+  }
+  // Ctrl/Cmd+/: toggle theme
+  if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+    e.preventDefault();
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    applyTheme(current === 'dark' ? 'light' : 'dark');
+    saveSettings();
+    return;
+  }
+  // Ctrl/Cmd+.: settings
+  if ((e.metaKey || e.ctrlKey) && e.key === '.') {
+    e.preventDefault();
+    settingsPanel.classList.toggle('open');
+    return;
+  }
+  // Ctrl/Cmd+E: export
+  if ((e.metaKey || e.ctrlKey) && e.key === 'e') {
+    e.preventDefault();
+    exportConversation();
+    return;
+  }
+  // Ctrl/Cmd+N: new chat
+  if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+    e.preventDefault();
+    createNewSession();
+    return;
   }
 });
 
 userInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    sendMessage();
+    if (!slashMenu.classList.contains('hidden') && slashMatches.length > 0) {
+      selectActiveSlash();
+    } else {
+      sendMessage();
+    }
+    return;
+  }
+  if (e.key === 'ArrowDown' && !slashMenu.classList.contains('hidden')) {
+    e.preventDefault();
+    moveSlashSelection(1);
+    return;
+  }
+  if (e.key === 'ArrowUp' && !slashMenu.classList.contains('hidden')) {
+    e.preventDefault();
+    moveSlashSelection(-1);
+    return;
+  }
+  if (e.key === 'Tab' && !slashMenu.classList.contains('hidden')) {
+    e.preventDefault();
+    selectActiveSlash();
+    return;
+  }
+  if (e.key === 'Escape' && !slashMenu.classList.contains('hidden')) {
+    hideSlashMenu();
   }
 });
 
@@ -892,6 +952,19 @@ function finalizeBot(bubble, fullText) {
 async function sendMessage() {
   const text = userInput.value.trim();
   if (!text || isSending) return;
+  hideSlashMenu();
+
+  // Slash command interception
+  if (text.startsWith('/')) {
+    const cmd = COMMANDS.find(c => text === c.cmd || text.startsWith(c.cmd + ' '));
+    if (cmd) {
+      userInput.value = '';
+      autoResize(userInput);
+      updateCharCounter();
+      try { await cmd.run(); } catch (err) { console.error('Command failed:', err); }
+      return;
+    }
+  }
 
   isSending = true;
   sendBtn.disabled = true;
@@ -1283,6 +1356,151 @@ function exportConversation() {
 }
 
 if (exportBtn) exportBtn.addEventListener('click', exportConversation);
+
+// ── Slash commands + command palette ───────────────────────────────
+const paletteBackdrop = document.getElementById('paletteBackdrop');
+const paletteInput = document.getElementById('paletteInput');
+const paletteList = document.getElementById('paletteList');
+const shortcutsBackdrop = document.getElementById('shortcutsBackdrop');
+const shortcutsClose = document.getElementById('shortcutsClose');
+const slashMenu = document.getElementById('slashMenu');
+
+const COMMANDS = [
+  { cmd: '/help', name: 'Show slash command help', run: () => sendCommandMessage('Available commands:\n' + COMMANDS.map(c => c.cmd + ' — ' + c.name).join('\n')) },
+  { cmd: '/new', name: 'Start a new chat', run: () => createNewSession() },
+  { cmd: '/clear', name: 'Clear the current chat', run: async () => { if (currentSessionId) await deleteSession(currentSessionId); } },
+  { cmd: '/rename', name: 'Rename the current chat', run: () => {
+      if (!currentSessionId) return;
+      const li = document.querySelector('.session-item.active');
+      const titleBtn = li && li.querySelector('.session-title');
+      if (titleBtn) beginRename(li, titleBtn, currentSessionId);
+    } },
+  { cmd: '/export', name: 'Export current chat as Markdown', run: () => exportConversation() },
+  { cmd: '/theme', name: 'Toggle dark/light theme', run: () => { const t = document.documentElement.getAttribute('data-theme') || 'dark'; applyTheme(t === 'dark' ? 'light' : 'dark'); saveSettings(); } },
+  { cmd: '/settings', name: 'Open settings panel', run: () => settingsPanel.classList.toggle('open') },
+  { cmd: '/shortcuts', name: 'Show keyboard shortcuts', run: () => openShortcuts() },
+  { cmd: '/model', name: 'Cycle to next model', run: () => {
+      if (!modelSelect.options.length) return;
+      modelSelect.selectedIndex = (modelSelect.selectedIndex + 1) % modelSelect.options.length;
+      saveSettings();
+    } },
+];
+
+async function sendCommandMessage(text) {
+  if (!currentSessionId) await createNewSession();
+  addBubble(text, 'user', Date.now(), false);
+  // Commands don't get sent to the LLM — we just display them.
+  // The user can see the response inline.
+}
+
+let paletteActiveIdx = 0;
+let paletteMatches = [];
+
+function openPalette() {
+  paletteBackdrop.classList.remove('hidden');
+  paletteInput.value = '';
+  paletteInput.focus();
+  renderPalette('');
+}
+function closePalette() {
+  paletteBackdrop.classList.add('hidden');
+  paletteInput.value = '';
+}
+function renderPalette(q) {
+  paletteMatches = COMMANDS.filter(c => !q || c.cmd.toLowerCase().includes(q.toLowerCase()) || c.name.toLowerCase().includes(q.toLowerCase()));
+  paletteActiveIdx = 0;
+  paletteList.innerHTML = '';
+  for (let i = 0; i < paletteMatches.length; i++) {
+    const c = paletteMatches[i];
+    const li = document.createElement('li');
+    li.className = i === 0 ? 'active' : '';
+    li.innerHTML = '<span class="cmd-name">' + c.cmd + '</span><span class="cmd-desc">' + c.name + '</span>';
+    li.addEventListener('click', () => { c.run(); closePalette(); });
+    paletteList.appendChild(li);
+  }
+  if (paletteMatches.length === 0) {
+    const li = document.createElement('li');
+    li.textContent = 'No matching commands';
+    li.style.color = 'var(--text-muted)';
+    li.style.cursor = 'default';
+    paletteList.appendChild(li);
+  }
+}
+paletteInput.addEventListener('input', () => renderPalette(paletteInput.value));
+paletteInput.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    paletteActiveIdx = Math.min(paletteActiveIdx + 1, paletteMatches.length - 1);
+    updatePaletteActive();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    paletteActiveIdx = Math.max(paletteActiveIdx - 1, 0);
+    updatePaletteActive();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (paletteMatches[paletteActiveIdx]) {
+      paletteMatches[paletteActiveIdx].run();
+      closePalette();
+    }
+  }
+});
+function updatePaletteActive() {
+  Array.from(paletteList.children).forEach((li, i) => {
+    li.classList.toggle('active', i === paletteActiveIdx);
+  });
+  const active = paletteList.children[paletteActiveIdx];
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+paletteBackdrop.addEventListener('click', (e) => { if (e.target === paletteBackdrop) closePalette(); });
+
+function openShortcuts() { shortcutsBackdrop.classList.remove('hidden'); }
+function closeShortcuts() { shortcutsBackdrop.classList.add('hidden'); }
+shortcutsClose.addEventListener('click', closeShortcuts);
+shortcutsBackdrop.addEventListener('click', (e) => { if (e.target === shortcutsBackdrop) closeShortcuts(); });
+
+// ── Slash command autocomplete menu ────────────────────────────────
+let slashMatches = [];
+let slashActiveIdx = 0;
+function showSlashMenu(filter) {
+  slashMatches = COMMANDS.filter(c => c.cmd.toLowerCase().startsWith(filter.toLowerCase()));
+  if (slashMatches.length === 0) { hideSlashMenu(); return; }
+  slashActiveIdx = 0;
+  slashMenu.innerHTML = '';
+  for (let i = 0; i < slashMatches.length; i++) {
+    const c = slashMatches[i];
+    const li = document.createElement('li');
+    li.className = 'slash-item' + (i === 0 ? ' active' : '');
+    li.innerHTML = '<span class="name">' + c.cmd + '</span><span class="desc">' + c.name + '</span>';
+    li.addEventListener('mousedown', (e) => { e.preventDefault(); applySlash(c.cmd); });
+    slashMenu.appendChild(li);
+  }
+  slashMenu.classList.remove('hidden');
+}
+function hideSlashMenu() { slashMenu.classList.add('hidden'); slashMatches = []; }
+function moveSlashSelection(delta) {
+  if (!slashMatches.length) return;
+  slashActiveIdx = (slashActiveIdx + delta + slashMatches.length) % slashMatches.length;
+  Array.from(slashMenu.children).forEach((li, i) => li.classList.toggle('active', i === slashActiveIdx));
+}
+function selectActiveSlash() {
+  if (slashMatches[slashActiveIdx]) applySlash(slashMatches[slashActiveIdx].cmd);
+}
+function applySlash(cmd) {
+  userInput.value = cmd + ' ';
+  userInput.focus();
+  hideSlashMenu();
+}
+userInput.addEventListener('input', () => {
+  const val = userInput.value;
+  if (val.startsWith('/') && !val.includes(' ') && val.length < 30) {
+    showSlashMenu(val);
+  } else {
+    hideSlashMenu();
+  }
+});
+// Hide slash menu when the input loses focus (unless clicking the menu)
+userInput.addEventListener('blur', () => { setTimeout(() => hideSlashMenu(), 150); });
+slashMenu.addEventListener('mousedown', (e) => e.preventDefault());
 
 // ── Init ────────────────────────────────────────────────────────────
 (async function init() {
