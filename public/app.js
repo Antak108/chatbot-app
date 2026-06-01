@@ -6,11 +6,21 @@ const messagesEl = document.getElementById('messages');
 const welcomeEl = document.getElementById('welcome');
 const userInput = document.getElementById('userInput');
 const sendBtn = document.getElementById('sendBtn');
+const stopBtn = document.getElementById('stopBtn');
 const charCounter = document.getElementById('charCounter');
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsPanel = document.getElementById('settingsPanel');
 const systemPromptEl = document.getElementById('systemPrompt');
 const presetSelect = document.getElementById('presetSelect');
+const modelSelect = document.getElementById('modelSelect');
+const temperatureEl = document.getElementById('temperature');
+const temperatureVal = document.getElementById('temperatureVal');
+const topPEl = document.getElementById('topP');
+const topPVal = document.getElementById('topPVal');
+const topKEl = document.getElementById('topK');
+const topKVal = document.getElementById('topKVal');
+const maxTokensEl = document.getElementById('maxTokens');
+const streamToggle = document.getElementById('streamToggle');
 const sidebarEl = document.getElementById('sidebar');
 const sessionListEl = document.getElementById('sessionList');
 const newChatBtn = document.getElementById('newChatBtn');
@@ -25,6 +35,7 @@ const exportBtn = document.getElementById('exportBtn');
 const quickPrompts = document.getElementById('quickPrompts');
 
 const STORAGE_KEY = 'chatbot.lastSessionId';
+const SETTINGS_KEY = 'chatbot.settings';
 const MAX_INPUT_LENGTH = 2000;
 
 // ── System prompt presets ──────────────────────────────────────────
@@ -42,10 +53,12 @@ const PRESETS = [
 // ── State ────────────────────────────────────────────────────────────
 let currentSessionId = null;
 let isSending = false;
+let activeController = null;
 let sessions = [];
 let sessionFilter = '';
 let lastBotBubble = null;
 let lastUserMessage = null;
+let availableModels = [];
 
 // ── Populate preset selector ────────────────────────────────────────
 for (const p of PRESETS) {
@@ -62,10 +75,69 @@ presetSelect.addEventListener('change', () => {
 });
 
 systemPromptEl.addEventListener('input', () => {
-  // Mark as custom if user edits
   const match = PRESETS.find(p => p.prompt === systemPromptEl.value);
   if (!match) presetSelect.value = '';
 });
+
+// ── Generation parameters: live update + persist ───────────────────
+function updateParamDisplays() {
+  temperatureVal.textContent = (+temperatureEl.value).toFixed(2);
+  topPVal.textContent = (+topPEl.value).toFixed(2);
+  topKVal.textContent = String(parseInt(topKEl.value, 10));
+}
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (typeof s.systemPrompt === 'string') systemPromptEl.value = s.systemPrompt;
+    if (typeof s.preset === 'string') presetSelect.value = s.preset;
+    if (typeof s.model === 'string') modelSelect.value = s.model;
+    if (typeof s.temperature === 'number') temperatureEl.value = s.temperature;
+    if (typeof s.topP === 'number') topPEl.value = s.topP;
+    if (typeof s.topK === 'number') topKEl.value = s.topK;
+    if (typeof s.maxTokens === 'number') maxTokensEl.value = s.maxTokens;
+    if (typeof s.stream === 'boolean') streamToggle.checked = s.stream;
+  } catch (_) { /* ignore */ }
+}
+function saveSettings() {
+  const s = {
+    systemPrompt: systemPromptEl.value,
+    preset: presetSelect.value,
+    model: modelSelect.value,
+    temperature: parseFloat(temperatureEl.value),
+    topP: parseFloat(topPEl.value),
+    topK: parseInt(topKEl.value, 10),
+    maxTokens: parseInt(maxTokensEl.value, 10) || 0,
+    stream: streamToggle.checked,
+  };
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (_) { /* ignore */ }
+}
+[temperatureEl, topPEl, topKEl, maxTokensEl].forEach(el => {
+  el.addEventListener('input', () => { updateParamDisplays(); saveSettings(); });
+});
+streamToggle.addEventListener('change', saveSettings);
+systemPromptEl.addEventListener('input', saveSettings);
+presetSelect.addEventListener('change', saveSettings);
+modelSelect.addEventListener('change', saveSettings);
+
+// ── Fetch available models ─────────────────────────────────────────
+async function loadModels() {
+  try {
+    const res = await fetch('/api/models');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    availableModels = await res.json();
+  } catch (_) {
+    availableModels = [{ id: 'liquid/lfm2.5-1.2b', label: 'liquid/lfm2.5-1.2b', state: 'unknown' }];
+  }
+  modelSelect.innerHTML = '';
+  for (const m of availableModels) {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.label + (m.state && m.state !== 'loaded' ? ' (' + m.state + ')' : '');
+    modelSelect.appendChild(opt);
+  }
+}
 
 // ── Configure marked (code block renderer) ──────────────────────────
 if (typeof marked !== 'undefined') {
@@ -154,6 +226,16 @@ function updateCharCounter() {
   charCounter.classList.toggle('warn', len > MAX_INPUT_LENGTH * 0.8 && len < MAX_INPUT_LENGTH);
   charCounter.classList.toggle('danger', len >= MAX_INPUT_LENGTH);
   sendBtn.disabled = isSending || len === 0 || len > MAX_INPUT_LENGTH;
+}
+
+function setStreamingUI(on) {
+  if (on) {
+    sendBtn.classList.add('hidden');
+    stopBtn.classList.remove('hidden');
+  } else {
+    stopBtn.classList.add('hidden');
+    sendBtn.classList.remove('hidden');
+  }
 }
 
 // ── Sidebar (mobile) ────────────────────────────────────────────────
@@ -294,6 +376,7 @@ async function createNewSession() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         system_prompt: systemPromptEl.value.trim() || 'You are a helpful assistant.',
+        model: modelSelect.value || null,
       }),
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -330,14 +413,13 @@ async function switchSession(id) {
     if (!Array.isArray(session.messages) || session.messages.length === 0) {
       showWelcomeArea();
     } else {
-      // Hide welcome via showMessagesArea
       welcomeEl.classList.add('hidden');
       messagesEl.classList.remove('hidden');
       exportBtn.classList.remove('hidden');
       for (let i = 0; i < session.messages.length; i++) {
         const m = session.messages[i];
         const isLast = i === session.messages.length - 1;
-        addBubble(m.content, m.role, m.created_at, isLast);
+        addBubble(m.content, m.role, m.created_at, isLast, m.tokens, m.model);
       }
     }
     renderSessionList();
@@ -411,6 +493,11 @@ userInput.addEventListener('keydown', (e) => {
 });
 
 sendBtn.addEventListener('click', sendMessage);
+stopBtn.addEventListener('click', () => {
+  if (activeController) {
+    activeController.abort();
+  }
+});
 
 // ── Copy buttons (code blocks + whole messages) ────────────────────
 async function copyText(text) {
@@ -451,9 +538,8 @@ document.addEventListener('click', (e) => {
   if (btn.classList.contains('msg-copy')) {
     const bubble = btn.closest('.msg');
     if (!bubble) return;
-    // Strip code blocks' copy buttons and time/actions before copying
     const clone = bubble.cloneNode(true);
-    clone.querySelectorAll('.msg-time, .msg-actions, .code-block .copy-btn').forEach(n => n.remove());
+    clone.querySelectorAll('.msg-time, .msg-actions, .code-block .copy-btn, .msg-tokens').forEach(n => n.remove());
     const text = (clone.innerText || clone.textContent || '').trim();
     copyText(text);
     const original = btn.textContent;
@@ -470,7 +556,7 @@ document.addEventListener('click', (e) => {
 });
 
 // ── Bubble rendering ────────────────────────────────────────────────
-function addBubble(text, role, ts, isLast) {
+function addBubble(text, role, ts, isLast, tokens, model) {
   showMessagesArea();
   const div = document.createElement('div');
   div.className = 'msg ' + role;
@@ -484,12 +570,22 @@ function addBubble(text, role, ts, isLast) {
   }
   div.appendChild(content);
 
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
   if (ts) {
     const time = document.createElement('span');
     time.className = 'msg-time';
     time.textContent = formatTime(ts);
-    div.appendChild(time);
+    meta.appendChild(time);
   }
+  if (role === 'bot' && typeof tokens === 'number' && tokens > 0) {
+    const tk = document.createElement('span');
+    tk.className = 'msg-tokens';
+    tk.textContent = tokens + ' tok';
+    tk.title = model ? 'Model: ' + model : 'Token estimate (~4 chars/token)';
+    meta.appendChild(tk);
+  }
+  if (meta.children.length) div.appendChild(meta);
 
   if (role === 'bot' && isLast && currentSessionId) {
     const actions = document.createElement('div');
@@ -535,12 +631,52 @@ function addTypingIndicator() {
   return div;
 }
 
+// ── Core: send (with streaming support) ────────────────────────────
+function buildBody(extra) {
+  const body = Object.assign({
+    message: extra.message,
+    system_prompt: systemPromptEl.value.trim() || 'You are a helpful assistant.',
+    model: modelSelect.value || undefined,
+    temperature: parseFloat(temperatureEl.value),
+    top_p: parseFloat(topPEl.value),
+    top_k: parseInt(topKEl.value, 10),
+    max_tokens: parseInt(maxTokensEl.value, 10) || 0,
+  }, extra);
+  if (currentSessionId) body.session_id = currentSessionId;
+  if (!body.max_tokens) delete body.max_tokens;
+  return body;
+}
+
+function appendTokenToBot(bubble, token) {
+  if (!bubble) return;
+  const content = bubble.querySelector('.msg-content');
+  if (!content) return;
+  // Append raw text to a hidden buffer, re-render markdown
+  // (simpler than incremental text-node appending, and matches our render pipeline)
+  const buf = bubble._streamBuf || '';
+  const next = buf + token;
+  bubble._streamBuf = next;
+  content.innerHTML = renderMarkdown(next);
+  initHighlight();
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function finalizeBot(bubble, fullText) {
+  if (!bubble) return;
+  bubble.classList.remove('streaming');
+  const content = bubble.querySelector('.msg-content');
+  if (content) content.innerHTML = renderMarkdown(fullText || (bubble._streamBuf || ''));
+  initHighlight();
+  delete bubble._streamBuf;
+}
+
 async function sendMessage() {
   const text = userInput.value.trim();
   if (!text || isSending) return;
 
   isSending = true;
   sendBtn.disabled = true;
+  setStreamingUI(true);
 
   addBubble(text, 'user', Date.now(), true);
   lastUserMessage = text;
@@ -548,47 +684,102 @@ async function sendMessage() {
   autoResize(userInput);
   updateCharCounter();
 
-  const typingEl = addTypingIndicator();
+  const useStream = streamToggle.checked;
+  const body = buildBody({ message: text, stream: useStream });
+  const controller = new AbortController();
+  activeController = controller;
+
+  let typingEl = useStream ? null : addTypingIndicator();
+  let botBubble = null;
 
   try {
-    const body = {
-      message: text,
-      system_prompt: systemPromptEl.value.trim() || 'You are a helpful assistant.',
-    };
-    if (currentSessionId) body.session_id = currentSessionId;
-
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
 
-    typingEl.remove();
-
     if (!res.ok) {
+      if (typingEl) typingEl.remove();
       const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-      addBubble('⚠️ ' + (err.error || 'Something went wrong.'), 'error');
+      addBubble('\u26A0\uFE0F ' + (err.error || 'Something went wrong.'), 'error');
       if (res.status === 400 && err.error === 'Session not found') {
         currentSessionId = null;
         localStorage.removeItem(STORAGE_KEY);
         await loadSessions();
       }
+      return;
+    }
+
+    if (useStream) {
+      // SSE consumer
+      botBubble = addBubble('', 'bot', Date.now(), true);
+      botBubble.classList.add('streaming');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const event = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          let eventName = 'message';
+          let dataLine = '';
+          for (const line of event.split('\n')) {
+            if (line.startsWith('event:')) eventName = line.slice(6).trim();
+            else if (line.startsWith('data:')) dataLine += (dataLine ? '\n' : '') + line.slice(5).trim();
+          }
+          if (!dataLine) continue;
+          let payload;
+          try { payload = JSON.parse(dataLine); } catch (_) { continue; }
+          if (eventName === 'chunk' && payload && payload.text) {
+            fullText += payload.text;
+            appendTokenToBot(botBubble, payload.text);
+          } else if (eventName === 'error') {
+            finalizeBot(botBubble, fullText);
+            addBubble('\u26A0\uFE0F ' + (payload.error || 'LLM error'), 'error');
+            botBubble = null;
+          } else if (eventName === 'done') {
+            // ignore payload.reply; we've already accumulated fullText
+          }
+        }
+      }
+      finalizeBot(botBubble, fullText);
+      lastBotBubble = botBubble;
     } else {
+      // Non-streaming JSON
       const data = await res.json();
+      if (typingEl) typingEl.remove();
       if (!data || typeof data.reply !== 'string') {
-        addBubble('⚠️ Invalid response from server', 'error');
+        addBubble('\u26A0\uFE0F Invalid response from server', 'error');
       } else {
         addBubble(data.reply, 'bot', Date.now(), true);
         if (currentSessionId) await loadSessions();
       }
     }
   } catch (err) {
-    typingEl.remove();
-    addBubble('⚠️ Network error — is the server running?', 'error');
+    if (typingEl) typingEl.remove();
+    if (err && err.name === 'AbortError') {
+      // user stopped — leave partial bubble as is
+      if (botBubble) finalizeBot(botBubble, botBubble._streamBuf || '');
+    } else {
+      console.error('Chat error:', err);
+      addBubble('\u26A0\uFE0F Network error — is the server running?', 'error');
+    }
   } finally {
     isSending = false;
+    activeController = null;
+    setStreamingUI(false);
     updateCharCounter();
     userInput.focus();
+    if (currentSessionId) await loadSessions();
   }
 }
 
@@ -597,50 +788,99 @@ async function regenerateLastResponse() {
 
   isSending = true;
   sendBtn.disabled = true;
+  setStreamingUI(true);
 
-  // Remove the last bot bubble (and its actions)
   if (lastBotBubble) {
     lastBotBubble.remove();
     lastBotBubble = null;
   }
 
-  const typingEl = addTypingIndicator();
+  const useStream = streamToggle.checked;
+  const body = buildBody({ message: lastUserMessage, regenerate: true, stream: useStream });
+  const controller = new AbortController();
+  activeController = controller;
+
+  let typingEl = useStream ? null : addTypingIndicator();
+  let botBubble = null;
 
   try {
-    const body = {
-      message: lastUserMessage,
-      system_prompt: systemPromptEl.value.trim() || 'You are a helpful assistant.',
-      session_id: currentSessionId,
-      regenerate: true,
-    };
-
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
 
-    typingEl.remove();
-
     if (!res.ok) {
+      if (typingEl) typingEl.remove();
       const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-      addBubble('⚠️ ' + (err.error || 'Something went wrong.'), 'error');
+      addBubble('\u26A0\uFE0F ' + (err.error || 'Something went wrong.'), 'error');
+      return;
+    }
+
+    if (useStream) {
+      botBubble = addBubble('', 'bot', Date.now(), true);
+      botBubble.classList.add('streaming');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const event = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          let eventName = 'message';
+          let dataLine = '';
+          for (const line of event.split('\n')) {
+            if (line.startsWith('event:')) eventName = line.slice(6).trim();
+            else if (line.startsWith('data:')) dataLine += (dataLine ? '\n' : '') + line.slice(5).trim();
+          }
+          if (!dataLine) continue;
+          let payload;
+          try { payload = JSON.parse(dataLine); } catch (_) { continue; }
+          if (eventName === 'chunk' && payload && payload.text) {
+            fullText += payload.text;
+            appendTokenToBot(botBubble, payload.text);
+          } else if (eventName === 'error') {
+            finalizeBot(botBubble, fullText);
+            addBubble('\u26A0\uFE0F ' + (payload.error || 'LLM error'), 'error');
+            botBubble = null;
+          }
+        }
+      }
+      finalizeBot(botBubble, fullText);
+      lastBotBubble = botBubble;
     } else {
       const data = await res.json();
+      if (typingEl) typingEl.remove();
       if (data && typeof data.reply === 'string') {
         addBubble(data.reply, 'bot', Date.now(), true);
         await loadSessions();
       } else {
-        addBubble('⚠️ Invalid response from server', 'error');
+        addBubble('\u26A0\uFE0F Invalid response from server', 'error');
       }
     }
   } catch (err) {
-    typingEl.remove();
-    addBubble('⚠️ Network error — is the server running?', 'error');
+    if (typingEl) typingEl.remove();
+    if (err && err.name === 'AbortError') {
+      if (botBubble) finalizeBot(botBubble, botBubble._streamBuf || '');
+    } else {
+      console.error('Regen error:', err);
+      addBubble('\u26A0\uFE0F Network error — is the server running?', 'error');
+    }
   } finally {
     isSending = false;
+    activeController = null;
+    setStreamingUI(false);
     updateCharCounter();
     userInput.focus();
+    if (currentSessionId) await loadSessions();
   }
 }
 
@@ -658,13 +898,18 @@ function exportConversation() {
       lines.push('**System prompt:**');
       lines.push('');
       lines.push('> ' + (session.system_prompt || '').replace(/\n/g, '\n> '));
+      if (session.model) {
+        lines.push('');
+        lines.push('**Model:** `' + session.model + '`');
+      }
       lines.push('');
       lines.push('---');
       lines.push('');
       for (const m of (session.messages || [])) {
         const role = m.role === 'user' ? '**You**' : '**Assistant**';
         const time = m.created_at ? ' *(' + formatTime(m.created_at) + ')*' : '';
-        lines.push(role + time + ':');
+        const tk = m.tokens ? ' *[' + m.tokens + ' tok]*' : '';
+        lines.push(role + time + tk + ':');
         lines.push('');
         lines.push(m.content);
         if (m.blocked) {
@@ -691,6 +936,9 @@ if (exportBtn) exportBtn.addEventListener('click', exportConversation);
 
 // ── Init ────────────────────────────────────────────────────────────
 (async function init() {
+  await loadModels();
+  loadSettings();
+  updateParamDisplays();
   await loadSessions();
   const lastId = localStorage.getItem(STORAGE_KEY);
   if (lastId && sessions.find(s => s.id === lastId)) {

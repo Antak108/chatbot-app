@@ -11,6 +11,9 @@ const db = require('./db');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const LLM_BASE_URL = process.env.LLM_BASE_URL || 'http://localhost:1234';
+const LLM_STREAM_PATH = process.env.LLM_STREAM_PATH || '/api/v1/chat';
+const LLM_MODELS_PATH = process.env.LLM_MODELS_PATH || '/api/v1/models';
+const MAX_BODY_BYTES = 32 * 1024; // 32KB for chat (allows larger messages)
 
 // ═══════════════════════════════════════════════════════════════════════
 // MIDDLEWARE
@@ -36,7 +39,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '16kb' })); // Limit body size
+app.use(express.json({ limit: '32kb' })); // Limit body size (32KB to allow generation params)
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -83,7 +86,11 @@ const CANNED_HARMFUL = "I'm not able to help with that request. Please ask me so
 const EMPTY_REPLY = 'I have no response.';
 
 app.post('/api/chat', rateLimit, async (req, res) => {
-  const { message, system_prompt, session_id, regenerate } = req.body || {};
+  const {
+    message, system_prompt, session_id, regenerate,
+    model, temperature, top_p, top_k, max_tokens, seed, stop,
+    stream,
+  } = req.body || {};
 
   // ── Basic validation ───────────────────────────────────────────────
   if (!message || typeof message !== 'string') {
@@ -119,6 +126,14 @@ app.post('/api/chat', rateLimit, async (req, res) => {
         console.error(JSON.stringify({ reqId: req.id, event: 'session_persist_failed', error: err.message }));
       }
     }
+    if (stream === true) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.write(`event: chunk\ndata: ${JSON.stringify({ text: CANNED_INJECTION })}\n\n`);
+      res.write(`event: done\ndata: ${JSON.stringify({ blocked: true, reason: 'prompt_injection' })}\n\n`);
+      return res.end();
+    }
     return res.json({ reply: CANNED_INJECTION, blocked: true, reason: 'prompt_injection' });
   }
 
@@ -132,38 +147,169 @@ app.post('/api/chat', rateLimit, async (req, res) => {
         console.error(JSON.stringify({ reqId: req.id, event: 'session_persist_failed', error: err.message }));
       }
     }
+    if (stream === true) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.write(`event: chunk\ndata: ${JSON.stringify({ text: CANNED_HARMFUL })}\n\n`);
+      res.write(`event: done\ndata: ${JSON.stringify({ blocked: true, reason: 'harmful_content' })}\n\n`);
+      return res.end();
+    }
     return res.json({ reply: CANNED_HARMFUL, blocked: true, reason: 'harmful_content' });
   }
 
-  // ── Forward to LLM ────────────────────────────────────────────────
-  try {
-    const baseSystemPrompt =
-      (typeof system_prompt === 'string' && system_prompt.trim()) ||
-      (session && session.system_prompt) ||
-      'You are a helpful assistant.';
-    const hardenedSystemPrompt = baseSystemPrompt + SAFETY_RULES_SUFFIX;
+  // ── Build LLM payload (shared by streaming and non-streaming) ──────
+  const baseSystemPrompt =
+    (typeof system_prompt === 'string' && system_prompt.trim()) ||
+    (session && session.system_prompt) ||
+    'You are a helpful assistant.';
+  const hardenedSystemPrompt = baseSystemPrompt + SAFETY_RULES_SUFFIX;
 
-    // Build messages array: system, [history...], user
-    const messages = [{ role: 'system', content: hardenedSystemPrompt }];
-    if (session) {
-      // Regenerate: drop the last assistant message so the new reply replaces it
-      if (regenerate === true) {
-        try { db.popLastMessage(session_id); } catch (_) { /* ignore */ }
+  if (regenerate === true && session) {
+    try { db.popLastMessage(session_id); } catch (_) { /* ignore */ }
+  }
+
+  const llmPayload = {
+    model: (typeof model === 'string' && model.trim()) || (session && session.model) || 'liquid/lfm2.5-1.2b',
+    system_prompt: hardenedSystemPrompt,
+    input: guardrails.sanitizeHtml(message),
+  };
+  if (typeof temperature === 'number') llmPayload.temperature = temperature;
+  if (typeof top_p === 'number') llmPayload.top_p = top_p;
+  if (typeof top_k === 'number') llmPayload.top_k = top_k;
+  if (typeof max_tokens === 'number' && max_tokens > 0) llmPayload.max_tokens = max_tokens;
+  if (typeof seed === 'number') llmPayload.seed = seed;
+  if (Array.isArray(stop) && stop.length > 0) llmPayload.stop = stop;
+
+  // ── Streaming response ─────────────────────────────────────────────
+  if (stream === true) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders && res.flushHeaders();
+
+    const isClientGone = () => res.writableEnded || res.destroyed || req.aborted;
+
+    let llmResp;
+    try {
+      llmResp = await fetch(`${LLM_BASE_URL}${LLM_STREAM_PATH}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+        body: JSON.stringify({ ...llmPayload, stream: true }),
+      });
+    } catch (err) {
+      console.error(JSON.stringify({ reqId: req.id, event: 'llm_unreachable', error: err.message }));
+      if (!isClientGone()) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: 'Could not reach the LLM service. Is it running?' })}\n\n`);
+        res.end();
       }
-      const history = db.getMessages(session_id);
-      for (const m of history) {
-        messages.push({ role: m.role, content: m.content });
+      return;
+    }
+
+    if (!llmResp.ok) {
+      const errText = await llmResp.text();
+      console.error(JSON.stringify({ reqId: req.id, event: 'llm_error', status: llmResp.status, body: errText }));
+      if (!isClientGone()) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: 'LLM service returned an error.' })}\n\n`);
+        res.end();
+      }
+      return;
+    }
+
+    // Read the SSE stream from the LLM and forward chunks.
+    // Tolerates LM Studio event format, OpenAI delta format, and bare JSON lines.
+    let fullText = '';
+    const reader = llmResp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        if (isClientGone()) {
+          try { await reader.cancel(); } catch (_) { /* ignore */ }
+          break;
+        }
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process SSE events separated by blank lines
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const eventBlock = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+
+          let dataLines = [];
+          for (const line of eventBlock.split('\n')) {
+            if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+          }
+          if (dataLines.length === 0) continue;
+          const payload = dataLines.join('\n');
+          if (payload === '[DONE]') continue;
+
+          let token = '';
+          try {
+            const obj = JSON.parse(payload);
+            // LM Studio event format
+            if (obj.type === 'message.delta' && typeof obj.content === 'string') {
+              token = obj.content;
+            }
+            // LM Studio chat.end — fall back to full text
+            else if (obj.type === 'chat.end' && obj.result && Array.isArray(obj.result.output)) {
+              const msg = obj.result.output.find(o => o.type === 'message');
+              if (msg && typeof msg.content === 'string') fullText = msg.content;
+            }
+            // OpenAI delta format
+            else if (obj.choices && obj.choices[0]) {
+              token = obj.choices[0].delta?.content || obj.choices[0].text || '';
+            }
+            // Generic shapes
+            else if (typeof obj.content === 'string') {
+              token = obj.content;
+            } else if (typeof obj.token === 'string') {
+              token = obj.token;
+            } else if (typeof obj.output === 'string') {
+              token = obj.output;
+            }
+          } catch (_) {
+            // Plain text payload — emit as a single chunk
+            token = payload;
+          }
+          if (token) {
+            fullText += token;
+            res.write(`event: chunk\ndata: ${JSON.stringify({ text: token })}\n\n`);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(JSON.stringify({ reqId: req.id, event: 'llm_stream_error', error: err.message }));
+    }
+
+    if (isClientGone()) return;
+
+    let reply = guardrails.sanitizeOutput(fullText);
+    if (!reply || reply.trim() === '') reply = EMPTY_REPLY;
+
+    if (session) {
+      try {
+        if (regenerate !== true) {
+          db.addMessage(session_id, { role: 'user', content: message });
+        }
+        const tokens = Math.ceil((message.length + reply.length) / 4);
+        db.addMessage(session_id, { role: 'assistant', content: reply, tokens });
+      } catch (err) {
+        console.error(JSON.stringify({ reqId: req.id, event: 'session_persist_failed', error: err.message }));
       }
     }
-    messages.push({ role: 'user', content: guardrails.sanitizeHtml(message) });
 
-    const llmPayload = {
-      model: 'liquid/lfm2.5-1.2b',
-      system_prompt: hardenedSystemPrompt,
-      input: guardrails.sanitizeHtml(message),
-    };
+    res.write(`event: done\ndata: ${JSON.stringify({ reply })}\n\n`);
+    return res.end();
+  }
 
-    const llmResponse = await fetch(`${LLM_BASE_URL}/api/v1/chat`, {
+  // ── Non-streaming response (existing behavior) ─────────────────────
+  try {
+    const llmResponse = await fetch(`${LLM_BASE_URL}${LLM_STREAM_PATH}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(llmPayload),
@@ -198,7 +344,8 @@ app.post('/api/chat', rateLimit, async (req, res) => {
         if (regenerate !== true) {
           db.addMessage(session_id, { role: 'user', content: message });
         }
-        db.addMessage(session_id, { role: 'assistant', content: reply });
+        const tokens = Math.ceil((message.length + reply.length) / 4);
+        db.addMessage(session_id, { role: 'assistant', content: reply, tokens });
       } catch (err) {
         console.error(JSON.stringify({ reqId: req.id, event: 'session_persist_failed', error: err.message }));
       }
@@ -220,8 +367,8 @@ app.get('/api/sessions', (_req, res) => {
 });
 
 app.post('/api/sessions', (req, res) => {
-  const { system_prompt, title } = req.body || {};
-  const session = db.createSession({ system_prompt, title });
+  const { system_prompt, title, model } = req.body || {};
+  const session = db.createSession({ system_prompt, title, model });
   res.status(201).json(session);
 });
 
@@ -257,6 +404,47 @@ app.delete('/api/sessions/:id', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 // MISC
 // ═══════════════════════════════════════════════════════════════════════
+
+// ─── Models list (proxies LM Studio /v1/models or /api/v1/models) ───
+let modelsCache = { data: null, expiresAt: 0 };
+const MODELS_TTL_MS = 60 * 1000;
+
+app.get('/api/models', async (_req, res) => {
+  if (modelsCache.data && Date.now() < modelsCache.expiresAt) {
+    return res.json(modelsCache.data);
+  }
+  try {
+    const r = await fetch(`${LLM_BASE_URL}${LLM_MODELS_PATH}`, { method: 'GET' });
+    if (!r.ok) throw new Error('LLM returned ' + r.status);
+    const data = await r.json();
+    // Normalize: accept OpenAI shape {data:[{id,...}]}, LM Studio shape {models:[{key,display_name,...}]}, or bare array
+    let models;
+    if (Array.isArray(data)) {
+      models = data;
+    } else if (Array.isArray(data.data)) {
+      models = data.data;
+    } else if (Array.isArray(data.models)) {
+      models = data.models;
+    } else {
+      models = [];
+    }
+    const normalized = models.map(m => {
+      // LM Studio uses 'key' as the model id and 'display_name' as the human label
+      const id = m.id || m.key || m.name || m.model || m.path || '';
+      const label = m.display_name || m.id || m.key || m.name || m.model || id;
+      const state = m.state || m.status ||
+        (Array.isArray(m.loaded_instances) && m.loaded_instances.length > 0 ? 'loaded' : 'not-loaded');
+      return { id: String(id), label: String(label), state: String(state) };
+    }).filter(m => m.id);
+    modelsCache = { data: normalized, expiresAt: Date.now() + MODELS_TTL_MS };
+    res.json(normalized);
+  } catch (err) {
+    console.error(JSON.stringify({ event: 'models_fetch_failed', error: err.message }));
+    // Fallback: return the default model so the UI has something to show
+    const fallback = [{ id: 'liquid/lfm2.5-1.2b', label: 'liquid/lfm2.5-1.2b (default)', state: 'unknown' }];
+    res.json(fallback);
+  }
+});
 
 // ─── Health check ────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {

@@ -88,12 +88,13 @@ function getSession(id) {
   return migrate(data);
 }
 
-function createSession({ system_prompt, title } = {}) {
+function createSession({ system_prompt, title, model } = {}) {
   const now = Date.now();
   const session = {
     id: generateId(),
     title: (title && String(title).trim()) || 'New Chat',
     system_prompt: (system_prompt && String(system_prompt)) || 'You are a helpful assistant.',
+    model: (model && String(model)) || null,
     created_at: now,
     updated_at: now,
     messages: [],
@@ -137,6 +138,8 @@ function addMessage(id, msg) {
   };
   if (msg.blocked !== undefined) message.blocked = !!msg.blocked;
   if (msg.reason !== undefined) message.reason = String(msg.reason);
+  if (typeof msg.tokens === 'number' && msg.tokens >= 0) message.tokens = Math.floor(msg.tokens);
+  if (msg.model !== undefined) message.model = String(msg.model);
 
   session.messages.push(message);
   session.updated_at = Date.now();

@@ -53,9 +53,36 @@
         <select id="presetSelect" class="preset-select">
           <option value="">Custom&hellip;</option>
         </select>
+        <label for="modelSelect" class="mt-8">Model</label>
+        <select id="modelSelect" class="preset-select"></select>
         <label for="systemPrompt" class="mt-8">System Prompt</label>
-        <textarea id="systemPrompt" rows="3">You answer only in rhymes.</textarea>
-        <p class="settings-note">The preset fills the box but stays editable. Set the model in <code>server.js</code>.</p>
+        <textarea id="systemPrompt" rows="3">You are a helpful assistant.</textarea>
+        <details class="settings-advanced">
+          <summary>Generation parameters</summary>
+          <label class="param-row">
+            <span>Temperature</span>
+            <input type="range" id="temperature" min="0" max="2" step="0.05" value="0.7" />
+            <output id="temperatureVal">0.7</output>
+          </label>
+          <label class="param-row">
+            <span>Top-p</span>
+            <input type="range" id="topP" min="0" max="1" step="0.05" value="0.95" />
+            <output id="topPVal">0.95</output>
+          </label>
+          <label class="param-row">
+            <span>Top-k</span>
+            <input type="range" id="topK" min="0" max="100" step="1" value="40" />
+            <output id="topKVal">40</output>
+          </label>
+          <label class="param-row">
+            <span>Max tokens</span>
+            <input type="number" id="maxTokens" min="1" max="32768" step="1" value="0" />
+          </label>
+          <label class="param-row">
+            <span>Stream</span>
+            <input type="checkbox" id="streamToggle" checked />
+          </label>
+        </details>
       </div>
 
       <div class="welcome" id="welcome">
@@ -80,6 +107,7 @@
           <span class="char-counter" id="charCounter">0 / 2000</span>
         </div>
         <button class="send-btn" id="sendBtn" type="button" aria-label="Send message">&#10148;</button>
+        <button class="stop-btn hidden" id="stopBtn" type="button" aria-label="Stop generation">&#9632;</button>
       </div>
     </div>
   </div>
