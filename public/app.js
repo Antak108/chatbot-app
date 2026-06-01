@@ -479,7 +479,7 @@ async function switchSession(id) {
       for (let i = 0; i < session.messages.length; i++) {
         const m = session.messages[i];
         const isLast = i === session.messages.length - 1;
-        addBubble(m.content, m.role, m.created_at, isLast, m.tokens, m.model);
+        addBubble(m.content, m.role, m.created_at, isLast, m.tokens, m.model, m);
       }
     }
     renderSessionList();
@@ -613,13 +613,70 @@ document.addEventListener('click', (e) => {
     regenerateLastResponse();
     return;
   }
+
+  // Continue
+  if (btn.classList.contains('msg-continue')) {
+    continueLastResponse(btn);
+    return;
+  }
+
+  // Edit
+  if (btn.classList.contains('msg-edit')) {
+    const bubble = btn.closest('.msg');
+    if (bubble) beginEdit(bubble);
+    return;
+  }
 });
 
 // ── Bubble rendering ────────────────────────────────────────────────
-function addBubble(text, role, ts, isLast, tokens, model) {
+function appendFeedback(parent, _unused, msgObj) {
+  const wrap = document.createElement('span');
+  wrap.className = 'msg-feedback';
+  const reactions = [
+    { key: 'up', label: '\uD83D\uDC4D' },
+    { key: 'down', label: '\uD83D\uDC4E' },
+    { key: 'love', label: '\u2764\uFE0F' },
+    { key: 'laugh', label: '\uD83D\uDE06' },
+  ];
+  const current = (msgObj && msgObj.reaction) || null;
+  for (const r of reactions) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'msg-react' + (current === r.key ? ' active' : '');
+    btn.textContent = r.label;
+    btn.title = r.key;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const mid = divContainingMsgId(parent);
+      if (!mid || !currentSessionId) return;
+      const newVal = current === r.key ? null : r.key;
+      fetch('/api/sessions/' + encodeURIComponent(currentSessionId) + '/messages/' + encodeURIComponent(mid), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reaction: newVal }),
+      }).catch(err => console.error('Reaction failed:', err));
+      wrap.querySelectorAll('.msg-react').forEach(b => b.classList.remove('active'));
+      if (newVal) btn.classList.add('active');
+    });
+    wrap.appendChild(btn);
+  }
+  parent.appendChild(wrap);
+}
+
+function divContainingMsgId(el) {
+  let cur = el;
+  while (cur && cur !== document.body) {
+    if (cur.classList && cur.classList.contains('msg')) return cur.dataset.id || null;
+    cur = cur.parentElement;
+  }
+  return null;
+}
+
+function addBubble(text, role, ts, isLast, tokens, model, msgObj) {
   showMessagesArea();
   const div = document.createElement('div');
   div.className = 'msg ' + role;
+  if (msgObj && msgObj.id) div.dataset.id = msgObj.id;
 
   const content = document.createElement('div');
   content.className = 'msg-content';
@@ -661,6 +718,14 @@ function addBubble(text, role, ts, isLast, tokens, model) {
     regenBtn.className = 'msg-regenerate';
     regenBtn.textContent = 'Regenerate';
     actions.appendChild(regenBtn);
+
+    const contBtn = document.createElement('button');
+    contBtn.type = 'button';
+    contBtn.className = 'msg-continue';
+    contBtn.textContent = 'Continue';
+    actions.appendChild(contBtn);
+
+    appendFeedback(actions, null, msgObj);
     div.appendChild(actions);
 
     lastBotBubble = div;
@@ -672,6 +737,23 @@ function addBubble(text, role, ts, isLast, tokens, model) {
     copyBtn.className = 'msg-copy';
     copyBtn.textContent = 'Copy';
     actions.appendChild(copyBtn);
+    if (isLast) {
+      const contBtn = document.createElement('button');
+      contBtn.type = 'button';
+      contBtn.className = 'msg-continue';
+      contBtn.textContent = 'Continue';
+      actions.appendChild(contBtn);
+    }
+    appendFeedback(actions, null, msgObj);
+    div.appendChild(actions);
+  } else if (role === 'user') {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'msg-edit';
+    editBtn.textContent = 'Edit';
+    actions.appendChild(editBtn);
     div.appendChild(actions);
   }
 
@@ -942,6 +1024,136 @@ async function regenerateLastResponse() {
     userInput.focus();
     if (currentSessionId) await loadSessions();
   }
+}
+
+async function continueLastResponse(btn) {
+  if (isSending || !currentSessionId) return;
+  btn.disabled = true;
+  isSending = true;
+  setStreamingUI(true);
+
+  const target = lastBotBubble || messagesEl.querySelector('.msg.bot:last-child');
+  if (!target) { isSending = false; setStreamingUI(false); btn.disabled = false; return; }
+  target.classList.add('streaming');
+  const content = target.querySelector('.msg-content');
+
+  let controller;
+  try {
+    controller = new AbortController();
+    activeController = controller;
+    const res = await fetch('/api/chat/continue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: currentSessionId,
+        system_prompt: systemPromptEl.value.trim() || 'You are a helpful assistant.',
+        model: modelSelect.value || undefined,
+        temperature: parseFloat(temperatureEl.value),
+        top_p: parseFloat(topPEl.value),
+        top_k: parseInt(topKEl.value, 10),
+        max_tokens: parseInt(maxTokensEl.value, 10) || 0,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      target.classList.remove('streaming');
+      const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+      addBubble('\u26A0\uFE0F ' + (err.error || 'Continue failed.'), 'error');
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullAppended = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const eventBlock = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        let dataLines = [];
+        for (const line of eventBlock.split('\n')) {
+          if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+        }
+        if (!dataLines.length) continue;
+        let payload;
+        try { payload = JSON.parse(dataLines.join('\n')); } catch (_) { continue; }
+        if (payload && payload.text) {
+          fullAppended += payload.text;
+          const buf = (target._streamBuf || (target._streamBuf = (content.textContent || ''))) + payload.text;
+          target._streamBuf = buf;
+          content.innerHTML = renderMarkdown(buf);
+          initHighlight();
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+      }
+    }
+    target.classList.remove('streaming');
+    delete target._streamBuf;
+    await loadSessions();
+  } catch (err) {
+    target.classList.remove('streaming');
+    if (err && err.name === 'AbortError') {
+      if (content) content.innerHTML = renderMarkdown(content.textContent || '');
+    } else {
+      addBubble('\u26A0\uFE0F Continue failed: ' + err.message, 'error');
+    }
+  } finally {
+    isSending = false;
+    activeController = null;
+    setStreamingUI(false);
+    btn.disabled = false;
+    userInput.focus();
+  }
+}
+
+function beginEdit(bubble) {
+  if (!currentSessionId || !bubble.dataset.id) return;
+  if (bubble.classList.contains('editing')) return;
+  bubble.classList.add('editing');
+  const content = bubble.querySelector('.msg-content');
+  if (!content) return;
+  const original = content.textContent;
+  const ta = document.createElement('textarea');
+  ta.className = 'msg-edit-input';
+  ta.value = original;
+  ta.rows = Math.min(8, original.split('\n').length + 1);
+  content.replaceWith(ta);
+  ta.focus();
+  ta.setSelectionRange(original.length, original.length);
+
+  const restore = (newText) => {
+    const newContent = document.createElement('div');
+    newContent.className = 'msg-content';
+    newContent.textContent = newText;
+    ta.replaceWith(newContent);
+    bubble.classList.remove('editing');
+  };
+
+  const save = async () => {
+    const newText = ta.value;
+    if (newText === original) { restore(newText); return; }
+    try {
+      await fetch('/api/sessions/' + encodeURIComponent(currentSessionId) + '/messages/' + encodeURIComponent(bubble.dataset.id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: newText }),
+      });
+      restore(newText);
+      await loadSessions();
+    } catch (err) {
+      console.error('Edit failed:', err);
+      restore(original);
+    }
+  };
+
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') { e.preventDefault(); restore(original); }
+  });
+  ta.addEventListener('blur', () => { if (bubble.classList.contains('editing')) save(); });
 }
 
 // ── Export conversation as Markdown ────────────────────────────────

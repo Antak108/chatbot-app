@@ -961,3 +961,39 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ── Feedback / reaction buttons ─────────────────────────────────── */
+.msg-feedback {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border-glass);
+}
+.msg-react {
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: var(--transition);
+}
+.msg-react:hover { opacity: 1; background: var(--bg-glass); }
+.msg-react.active { opacity: 1; background: var(--accent-surface); border-color: var(--accent); }
+
+/* ── Inline edit textarea ────────────────────────────────────────── */
+.msg-edit-input {
+  width: 100%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: var(--msg-font-size);
+  outline: none;
+  resize: vertical;
+  min-height: 40px;
+}

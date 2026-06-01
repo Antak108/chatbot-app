@@ -396,6 +396,165 @@ app.patch('/api/sessions/:id', (req, res) => {
   }
 });
 
+// Edit, delete, or react to a single message
+app.patch('/api/sessions/:id/messages/:mid', (req, res) => {
+  const { content, reaction, feedback } = req.body || {};
+  try {
+    const updated = db.editMessage(req.params.id, req.params.mid, { content, reaction, feedback });
+    res.json(updated);
+  } catch (err) {
+    if (err.code === 'SESSION_NOT_FOUND') return res.status(404).json({ error: 'Session not found' });
+    if (err.code === 'MESSAGE_NOT_FOUND') return res.status(404).json({ error: 'Message not found' });
+    throw err;
+  }
+});
+
+app.delete('/api/sessions/:id/messages/:mid', (req, res) => {
+  try {
+    db.deleteMessage(req.params.id, req.params.mid);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.code === 'SESSION_NOT_FOUND') return res.status(404).json({ error: 'Session not found' });
+    if (err.code === 'MESSAGE_NOT_FOUND') return res.status(404).json({ error: 'Message not found' });
+    throw err;
+  }
+});
+
+// Continue the last assistant message (append more tokens)
+app.post('/api/chat/continue', rateLimit, async (req, res) => {
+  const { session_id, system_prompt, model, temperature, top_p, top_k, max_tokens, stream } = req.body || {};
+  if (!session_id) return res.status(400).json({ error: 'session_id is required' });
+
+  let session;
+  try {
+    session = db.getSession(session_id);
+  } catch (err) {
+    if (err.code === 'SESSION_NOT_FOUND') return res.status(404).json({ error: 'Session not found' });
+    throw err;
+  }
+  const lastMsg = session.messages[session.messages.length - 1];
+  if (!lastMsg || lastMsg.role !== 'assistant') {
+    return res.status(400).json({ error: 'Last message is not an assistant message' });
+  }
+
+  const baseSystemPrompt =
+    (typeof system_prompt === 'string' && system_prompt.trim()) ||
+    session.system_prompt ||
+    'You are a helpful assistant.';
+  const hardenedSystemPrompt = baseSystemPrompt + SAFETY_RULES_SUFFIX;
+
+  const llmPayload = {
+    model: (typeof model === 'string' && model.trim()) || session.model || 'liquid/lfm2.5-1.2b',
+    system_prompt: hardenedSystemPrompt,
+    input: 'Continue the previous response from where it left off. Do not repeat what was already said. Just continue.',
+  };
+  if (typeof temperature === 'number') llmPayload.temperature = Math.max(0.1, temperature);
+  if (typeof top_p === 'number') llmPayload.top_p = top_p;
+  if (typeof top_k === 'number') llmPayload.top_k = top_k;
+  if (typeof max_tokens === 'number' && max_tokens > 0) llmPayload.max_tokens = max_tokens;
+
+  const isClientGone = () => res.writableEnded || res.destroyed || req.aborted;
+
+  let llmResp;
+  try {
+    llmResp = await fetch(`${LLM_BASE_URL}${LLM_STREAM_PATH}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...llmPayload, stream: stream === true }),
+    });
+  } catch (err) {
+    if (!isClientGone()) {
+      return res.status(503).json({ error: 'LLM unreachable' });
+    }
+    return;
+  }
+  if (!llmResp.ok) {
+    if (!isClientGone()) {
+      return res.status(502).json({ error: 'LLM returned an error' });
+    }
+    return;
+  }
+
+  // Non-streaming path: just get the JSON response and persist
+  if (stream !== true) {
+    try {
+      const data = await llmResp.json();
+      let appended =
+        (Array.isArray(data.output) && data.output[0] && (data.output[0].content || data.output[0].text)) ||
+        data.response ||
+        (typeof data.output === 'string' && data.output) ||
+        (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) ||
+        '';
+      appended = guardrails.sanitizeOutput(appended);
+      if (appended) {
+        try { db.appendToLastAssistant(session_id, appended); } catch (e) { /* ignore */ }
+      }
+      return res.json({ appended });
+    } catch (err) {
+      return res.status(502).json({ error: 'Failed to parse LLM response' });
+    }
+  }
+
+  // Streaming path — set SSE headers AFTER we know we're streaming
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders && res.flushHeaders();
+
+  // Streaming path
+  const reader = llmResp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let appended = '';
+  try {
+    while (true) {
+      if (isClientGone()) {
+        try { await reader.cancel(); } catch (_) { /* ignore */ }
+        break;
+      }
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const eventBlock = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        let dataLines = [];
+        for (const line of eventBlock.split('\n')) {
+          if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+        }
+        if (!dataLines.length) continue;
+        const payload = dataLines.join('\n');
+        if (payload === '[DONE]') continue;
+        let token = '';
+        try {
+          const obj = JSON.parse(payload);
+          if (obj.type === 'message.delta' && typeof obj.content === 'string') token = obj.content;
+          else if (obj.choices && obj.choices[0]) token = obj.choices[0].delta?.content || '';
+          else if (typeof obj.content === 'string') token = obj.content;
+        } catch (_) { token = payload; }
+        if (token) {
+          appended += token;
+          res.write(`event: chunk\ndata: ${JSON.stringify({ text: token })}\n\n`);
+        }
+      }
+    }
+  } catch (_) { /* ignore */ }
+
+  if (isClientGone()) return;
+  const cleanAppend = guardrails.sanitizeOutput(appended);
+  if (cleanAppend) {
+    try {
+      db.appendToLastAssistant(session_id, cleanAppend);
+    } catch (err) {
+      console.error(JSON.stringify({ reqId: req.id, event: 'continue_persist_failed', error: err.message }));
+    }
+  }
+  res.write(`event: done\ndata: ${JSON.stringify({ appended: cleanAppend })}\n\n`);
+  res.end();
+});
+
 app.delete('/api/sessions/:id', (req, res) => {
   db.deleteSession(req.params.id);
   res.json({ ok: true });

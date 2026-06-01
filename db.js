@@ -132,6 +132,7 @@ function renameSession(id, { title } = {}) {
 function addMessage(id, msg) {
   const session = getSession(id);
   const message = {
+    id: generateId(),
     role: msg.role,
     content: String(msg.content || ''),
     created_at: Date.now(),
@@ -196,6 +197,77 @@ function popLastMessage(id) {
   return removed;
 }
 
+function editMessage(id, messageId, patch) {
+  const session = getSession(id);
+  const idx = session.messages.findIndex(m => m.id === messageId);
+  if (idx === -1) {
+    const err = new Error('Message not found');
+    err.code = 'MESSAGE_NOT_FOUND';
+    throw err;
+  }
+  if (typeof patch.content === 'string') {
+    session.messages[idx].content = patch.content;
+    session.messages[idx].edited_at = Date.now();
+  }
+  if (patch.reaction !== undefined) {
+    if (patch.reaction === null) delete session.messages[idx].reaction;
+    else session.messages[idx].reaction = String(patch.reaction);
+  }
+  if (patch.feedback !== undefined) {
+    if (patch.feedback === null) delete session.messages[idx].feedback;
+    else session.messages[idx].feedback = String(patch.feedback);
+  }
+  session.updated_at = Date.now();
+  atomicWriteSync(
+    path.join(DB_DIR, `${id}.json`),
+    JSON.stringify(session, null, 2),
+  );
+  invalidateCache();
+  return session.messages[idx];
+}
+
+function deleteMessage(id, messageId) {
+  const session = getSession(id);
+  const idx = session.messages.findIndex(m => m.id === messageId);
+  if (idx === -1) {
+    const err = new Error('Message not found');
+    err.code = 'MESSAGE_NOT_FOUND';
+    throw err;
+  }
+  session.messages.splice(idx, 1);
+  session.updated_at = Date.now();
+  atomicWriteSync(
+    path.join(DB_DIR, `${id}.json`),
+    JSON.stringify(session, null, 2),
+  );
+  invalidateCache();
+}
+
+function appendToLastAssistant(id, text, extra) {
+  const session = getSession(id);
+  if (!session.messages || session.messages.length === 0) {
+    const err = new Error('No messages to continue');
+    err.code = 'NO_MESSAGES';
+    throw err;
+  }
+  const last = session.messages[session.messages.length - 1];
+  if (last.role !== 'assistant') {
+    const err = new Error('Last message is not an assistant message');
+    err.code = 'NOT_ASSISTANT';
+    throw err;
+  }
+  last.content = (last.content || '') + text;
+  if (extra && typeof extra.tokens === 'number') last.tokens = Math.floor(extra.tokens);
+  last.continued_at = Date.now();
+  session.updated_at = Date.now();
+  atomicWriteSync(
+    path.join(DB_DIR, `${id}.json`),
+    JSON.stringify(session, null, 2),
+  );
+  invalidateCache();
+  return last;
+}
+
 function quarantine(filename) {
   try {
     const src = path.join(DB_DIR, filename);
@@ -224,6 +296,9 @@ module.exports = {
   addMessage,
   getMessages,
   popLastMessage,
+  editMessage,
+  deleteMessage,
+  appendToLastAssistant,
   CONTEXT_LIMIT,
   DB_DIR,
 };
