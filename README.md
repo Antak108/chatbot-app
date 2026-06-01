@@ -6,6 +6,8 @@
 
 A simple chatbot application powered by a locally running LLM, with built-in security guardrails, multi-turn conversation history, Markdown rendering, and an adversarial test suite using [PromptFoo](https://www.promptfoo.dev/).
 
+Detailed writeup: [Red-teaming Generative AI: Why Language is the New Exploit Vector](https://manishpandey.co.in/red-teaming-generative-ai-why-language-is-the-new-exploit-vector/)
+
 > **Purpose**: Demonstrate how to build, secure, and red-team test an LLM-powered application end-to-end.
 
 ---
