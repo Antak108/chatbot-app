@@ -17,6 +17,8 @@ const redact = require('./redact');
 const audit = require('./audit');
 const auth = require('./auth');
 const metrics = require('./metrics');
+const webhook = require('./webhook');
+const plugins = require('./plugins');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -200,13 +202,21 @@ app.post('/api/chat', rateLimit, async (req, res) => {
     'You are a helpful assistant.';
   const hardenedSystemPrompt = baseSystemPrompt + memory.asPromptSection() + SAFETY_RULES_SUFFIX;
 
+  // Run pre-chat plugins
+  const pluginOut = await plugins.run('pre-chat', {
+    system_prompt: hardenedSystemPrompt,
+    user_message: message,
+    session,
+  });
+  const finalSystemPrompt = (pluginOut && pluginOut.system_prompt) || hardenedSystemPrompt;
+
   if (regenerate === true && session) {
     try { db.popLastMessage(session_id); } catch (_) { /* ignore */ }
   }
 
   const llmPayload = {
     model: (typeof model === 'string' && model.trim()) || (session && session.model) || 'liquid/lfm2.5-1.2b',
-    system_prompt: hardenedSystemPrompt,
+    system_prompt: finalSystemPrompt,
     input: guardrails.sanitizeHtml(message),
   };
   if (typeof temperature === 'number') llmPayload.temperature = temperature;
@@ -399,6 +409,7 @@ app.post('/api/chat', rateLimit, async (req, res) => {
     return res.status(503).json({ error: 'Could not reach the LLM service. Is it running?' });
   } finally {
     audit.append({ event: 'chat', ip: req.ip, session_id: session_id || null, model: model || null });
+    webhook.fire('chat', { session_id: session_id || null, model: model || null, ip: req.ip });
   }
 });
 
@@ -587,9 +598,16 @@ app.post('/api/chat/continue', rateLimit, async (req, res) => {
     'You are a helpful assistant.';
   const hardenedSystemPrompt = baseSystemPrompt + memory.asPromptSection() + SAFETY_RULES_SUFFIX;
 
+  const pluginOutC = await plugins.run('pre-chat', {
+    system_prompt: hardenedSystemPrompt,
+    user_message: null,
+    session,
+  });
+  const finalSystemPromptC = (pluginOutC && pluginOutC.system_prompt) || hardenedSystemPrompt;
+
   const llmPayload = {
     model: (typeof model === 'string' && model.trim()) || session.model || 'liquid/lfm2.5-1.2b',
-    system_prompt: hardenedSystemPrompt,
+    system_prompt: finalSystemPromptC,
     input: 'Continue the previous response from where it left off. Do not repeat what was already said. Just continue.',
   };
   if (typeof temperature === 'number') llmPayload.temperature = Math.max(0.1, temperature);

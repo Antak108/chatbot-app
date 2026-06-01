@@ -1,0 +1,24 @@
+version: "3.8"
+services:
+  chatbot:
+    build: .
+    image: local-llm-chatbot:1.1
+    container_name: chatbot
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - LLM_BASE_URL=http://host.docker.internal:1234
+      - API_BEARER_TOKEN=
+      - PII_REDACT=0
+      - AUDIT_LOG=0
+      - SESSION_ENCRYPTION_KEY=
+      - WEBHOOK_URL=
+    volumes:
+      - chatbot-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  chatbot-data:
