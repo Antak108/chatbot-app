@@ -38,6 +38,10 @@ const sidebarSearch = document.getElementById('sidebarSearch');
 const sidebarSearchBtn = document.getElementById('sidebarSearchBtn');
 const exportBtn = document.getElementById('exportBtn');
 const quickPrompts = document.getElementById('quickPrompts');
+const attachBtn = document.getElementById('attachBtn');
+const fileInput = document.getElementById('fileInput');
+const attachmentsEl = document.getElementById('attachments');
+const dropOverlay = document.getElementById('dropOverlay');
 
 const STORAGE_KEY = 'chatbot.lastSessionId';
 const SETTINGS_KEY = 'chatbot.settings';
@@ -64,6 +68,7 @@ let sessionFilter = '';
 let lastBotBubble = null;
 let lastUserMessage = null;
 let availableModels = [];
+let pendingAttachments = []; // [{ filename, mime, size, text, charCount, isImage, dataUrl? }]
 
 // ── Populate preset selector ────────────────────────────────────────
 for (const p of PRESETS) {
@@ -180,6 +185,132 @@ if (themeSelect) themeSelect.addEventListener('change', () => { applyTheme(theme
 if (accentPicker) accentPicker.addEventListener('input', () => { applyAccent(accentPicker.value); saveSettings(); });
 if (densitySelect) densitySelect.addEventListener('change', () => { applyDensity(densitySelect.value); saveSettings(); });
 if (fontSizeSelect) fontSizeSelect.addEventListener('change', () => { applyFontSize(fontSizeSelect.value); saveSettings(); });
+
+// ── File attachments (upload, drag-drop, paste) ────────────────────
+async function handleFile(file) {
+  if (!file) return;
+  if (file.size > 10 * 1024 * 1024) {
+    addBubble('\u26A0\uFE0F File too large (max 10 MB).', 'error');
+    return;
+  }
+  const isImage = (file.type || '').startsWith('image/');
+  if (isImage) {
+    // Images: vision not enabled in this build; just attach the name
+    pendingAttachments.push({
+      filename: file.name || 'pasted-image',
+      mime: file.type,
+      size: file.size,
+      isImage: true,
+    });
+    renderAttachments();
+    return;
+  }
+  // Text or PDF: upload for extraction
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: form });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ error: 'Upload failed' }));
+      addBubble('\u26A0\uFE0F Upload failed: ' + (err.error || r.status), 'error');
+      return;
+    }
+    const data = await r.json();
+    pendingAttachments.push({
+      filename: data.filename,
+      mime: data.mime,
+      size: data.size,
+      text: data.text,
+      charCount: data.charCount,
+      isImage: false,
+    });
+    renderAttachments();
+  } catch (err) {
+    addBubble('\u26A0\uFE0F Upload error: ' + err.message, 'error');
+  }
+}
+
+function renderAttachments() {
+  attachmentsEl.innerHTML = '';
+  if (pendingAttachments.length === 0) {
+    attachmentsEl.classList.add('hidden');
+    return;
+  }
+  attachmentsEl.classList.remove('hidden');
+  pendingAttachments.forEach((a, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'attachment-chip';
+    const label = a.isImage ? a.filename + ' (image)' :
+      a.filename + ' (' + Math.round((a.size || 0) / 1024) + ' KB, ' + (a.charCount || 0) + ' chars)';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = label;
+    name.title = label;
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'remove';
+    rm.textContent = '\u00D7';
+    rm.title = 'Remove';
+    rm.addEventListener('click', () => {
+      pendingAttachments.splice(idx, 1);
+      renderAttachments();
+    });
+    chip.appendChild(name);
+    chip.appendChild(rm);
+    attachmentsEl.appendChild(chip);
+  });
+}
+
+if (attachBtn) {
+  attachBtn.addEventListener('click', () => fileInput.click());
+}
+if (fileInput) {
+  fileInput.addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) handleFile(f);
+    fileInput.value = '';
+  });
+}
+
+// Drag-and-drop
+let dragDepth = 0;
+document.addEventListener('dragenter', (e) => {
+  if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+  e.preventDefault();
+  dragDepth++;
+  dropOverlay.classList.remove('hidden');
+});
+document.addEventListener('dragover', (e) => {
+  if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+  e.preventDefault();
+});
+document.addEventListener('dragleave', (e) => {
+  if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) dropOverlay.classList.add('hidden');
+});
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  dropOverlay.classList.add('hidden');
+  const files = Array.from(e.dataTransfer && e.dataTransfer.files || []);
+  for (const f of files) handleFile(f);
+});
+
+// Paste images from clipboard
+userInput.addEventListener('paste', (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.kind === 'file') {
+      const f = item.getAsFile();
+      if (f) {
+        e.preventDefault();
+        handleFile(f);
+      }
+    }
+  }
+});
 
 // ── Fetch available models ─────────────────────────────────────────
 async function loadModels() {
@@ -970,14 +1101,38 @@ async function sendMessage() {
   sendBtn.disabled = true;
   setStreamingUI(true);
 
+  // Show the user message; if there are attachments, also show a chip line
   addBubble(text, 'user', Date.now(), true);
+  if (pendingAttachments.length > 0) {
+    for (const a of pendingAttachments) {
+      if (a.isImage) {
+        addBubble('\u{1F4CE} ' + a.filename + ' (image — vision not enabled)', 'user', Date.now(), true);
+      } else {
+        addBubble('\u{1F4CE} ' + a.filename + ' (' + a.charCount + ' chars)', 'user', Date.now(), true);
+      }
+    }
+  }
   lastUserMessage = text;
   userInput.value = '';
   autoResize(userInput);
   updateCharCounter();
 
+  // Build the LLM-bound message: prepend the file content as context
+  let outboundMessage = text;
+  const textAttachments = pendingAttachments.filter(a => !a.isImage && a.text);
+  if (textAttachments.length > 0) {
+    const contextParts = textAttachments.map(a =>
+      '\n\n<file name="' + a.filename + '">\n' + a.text + '\n</file>'
+    );
+    outboundMessage = text + contextParts.join('');
+  }
+
+  // Clear attachments after sending
+  pendingAttachments = [];
+  renderAttachments();
+
   const useStream = streamToggle.checked;
-  const body = buildBody({ message: text, stream: useStream });
+  const body = buildBody({ message: outboundMessage, stream: useStream });
   const controller = new AbortController();
   activeController = controller;
 
@@ -1082,10 +1237,35 @@ async function regenerateLastResponse() {
   sendBtn.disabled = true;
   setStreamingUI(true);
 
-  if (lastBotBubble) {
-    lastBotBubble.remove();
-    lastBotBubble = null;
+  addBubble(text, 'user', Date.now(), true);
+  if (pendingAttachments.length > 0) {
+    for (const a of pendingAttachments) {
+      if (a.isImage) {
+        addBubble('\u{1F4CE} ' + a.filename + ' (image — vision not enabled)', 'user', Date.now(), true);
+      } else {
+        addBubble('\u{1F4CE} ' + a.filename + ' (' + a.charCount + ' chars)', 'user', Date.now(), true);
+      }
+    }
   }
+  lastUserMessage = text;
+
+  // Build the LLM-bound message: prepend the file content as context
+  let outboundMessage = text;
+  const textAttachments = pendingAttachments.filter(a => !a.isImage && a.text);
+  if (textAttachments.length > 0) {
+    const contextParts = textAttachments.map(a =>
+      '\n\n<file name="' + a.filename + '">\n' + a.text + '\n</file>'
+    );
+    outboundMessage = text + contextParts.join('');
+  }
+
+  // Clear attachments after sending
+  pendingAttachments = [];
+  renderAttachments();
+
+  userInput.value = '';
+  autoResize(userInput);
+  updateCharCounter();
 
   const useStream = streamToggle.checked;
   const body = buildBody({ message: lastUserMessage, regenerate: true, stream: useStream });

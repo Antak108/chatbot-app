@@ -4,6 +4,8 @@
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
+const multer = require('multer');
+const pdfParse = require('pdf-parse');
 const { version } = require('./package.json');
 const guardrails = require('./guardrails');
 const db = require('./db');
@@ -359,9 +361,58 @@ app.post('/api/chat', rateLimit, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
-// SESSIONS API
-// ═══════════════════════════════════════════════════════════════════════
+// ── File upload (TXT, MD, PDF → extracted text) ───────────────────
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+});
+
+const UPLOAD_MIME_ALLOW = new Set([
+  'text/plain',
+  'text/markdown',
+  'text/x-markdown',
+  'text/html',
+  'text/csv',
+  'application/json',
+  'application/pdf',
+]);
+
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded (field name must be "file").' });
+  if (req.file.size === 0) return res.status(400).json({ error: 'Empty file.' });
+  const mime = req.file.mimetype;
+  const ext = path.extname(req.file.originalname || '').toLowerCase();
+  const allowedExts = ['.txt', '.md', '.markdown', '.html', '.htm', '.csv', '.json', '.pdf', '.log'];
+  if (!UPLOAD_MIME_ALLOW.has(mime) && !allowedExts.includes(ext)) {
+    return res.status(415).json({ error: 'Unsupported file type: ' + (mime || ext || 'unknown') });
+  }
+
+  try {
+    let text = '';
+    if (mime === 'application/pdf' || ext === '.pdf') {
+      const parser = new pdfParse.PDFParse({ data: req.file.buffer });
+      const result = await parser.getText();
+      text = (result && result.text) || '';
+    } else {
+      text = req.file.buffer.toString('utf8');
+    }
+    // Trim and cap at ~200KB of text
+    if (text.length > 200 * 1024) {
+      text = text.slice(0, 200 * 1024) + '\n\n[... truncated, file is too large to include in full]';
+    }
+    res.json({
+      filename: req.file.originalname,
+      size: req.file.size,
+      mime: mime,
+      pages: ext === '.pdf' ? undefined : undefined,
+      text,
+      charCount: text.length,
+    });
+  } catch (err) {
+    console.error(JSON.stringify({ reqId: req.id, event: 'upload_failed', error: err.message, file: req.file.originalname }));
+    res.status(500).json({ error: 'Failed to extract text: ' + err.message });
+  }
+});
 
 app.get('/api/sessions', (_req, res) => {
   res.json(db.listSessions());

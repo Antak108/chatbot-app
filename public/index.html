@@ -137,11 +137,21 @@
 
       <div class="input-bar">
         <div class="input-wrap">
-          <textarea id="userInput" placeholder="Type a message or /help&hellip;" rows="1" maxlength="2000"></textarea>
+          <textarea id="userInput" placeholder="Type a message, drop a file, or /help&hellip;" rows="1" maxlength="2000"></textarea>
           <span class="char-counter" id="charCounter">0 / 2000</span>
         </div>
+        <button class="attach-btn" id="attachBtn" type="button" aria-label="Attach file" title="Attach a file (TXT, MD, PDF, etc.)">&#128206;</button>
+        <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.markdown,.html,.htm,.csv,.json,.pdf,.log,text/*,application/pdf" />
         <button class="send-btn" id="sendBtn" type="button" aria-label="Send message">&#10148;</button>
         <button class="stop-btn hidden" id="stopBtn" type="button" aria-label="Stop generation">&#9632;</button>
+      </div>
+
+      <!-- Attached files preview -->
+      <div class="attachments hidden" id="attachments"></div>
+
+      <!-- Drag and drop overlay -->
+      <div class="drop-overlay hidden" id="dropOverlay">
+        <div class="drop-overlay-inner">Drop file to attach</div>
       </div>
     </div>
   </div>
