@@ -22,8 +22,10 @@
     <aside class="sidebar" id="sidebar" role="list" aria-label="Chat sessions">
       <div class="sidebar-header">
         <button class="new-chat-btn" id="newChatBtn" type="button" aria-label="New chat">+ New Chat</button>
+        <button class="import-btn" id="importBtn" type="button" aria-label="Import chat" title="Import chat (ChatGPT / Claude / JSON)">&#8615; Import</button>
         <button class="sidebar-close" id="sidebarClose" type="button" aria-label="Close sidebar">&times;</button>
       </div>
+      <input type="file" id="importFile" accept=".json,application/json" hidden />
       <div class="sidebar-search hidden" id="sidebarSearchWrap">
         <input type="search" id="sidebarSearch" placeholder="Search chats&hellip;" aria-label="Search chats" />
       </div>
@@ -46,7 +48,8 @@
           </div>
         </div>
         <div class="header-actions">
-          <button class="header-btn hidden" id="exportBtn" type="button" aria-label="Export conversation" title="Export as Markdown">&darr;</button>
+          <button class="header-btn hidden" id="exportBtn" type="button" aria-label="Export conversation" title="Export (md/html/json)">&darr;</button>
+          <button class="header-btn hidden" id="shareBtn" type="button" aria-label="Share conversation" title="Share as link">&#x1F517;</button>
           <button class="header-btn" id="themeBtn" type="button" aria-label="Toggle theme" title="Toggle theme">&#9788;</button>
           <button class="header-btn" id="sidebarSearchBtn" type="button" aria-label="Search chats" title="Search chats">&#128269;</button>
           <button class="header-btn" id="settingsBtn" type="button" aria-label="Settings" title="Settings">&#9881;&#65039;</button>

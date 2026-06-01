@@ -41,6 +41,9 @@ const searchInput = document.getElementById('searchInput');
 const searchRole = document.getElementById('searchRole');
 const searchResults = document.getElementById('searchResults');
 const exportBtn = document.getElementById('exportBtn');
+const shareBtn = document.getElementById('shareBtn');
+const importBtn = document.getElementById('importBtn');
+const importFile = document.getElementById('importFile');
 const quickPrompts = document.getElementById('quickPrompts');
 const attachBtn = document.getElementById('attachBtn');
 const fileInput = document.getElementById('fileInput');
@@ -589,12 +592,14 @@ function showMessagesArea() {
     messagesEl.classList.remove('hidden');
   }
   exportBtn.classList.remove('hidden');
+  if (shareBtn) shareBtn.classList.remove('hidden');
 }
 
 function showWelcomeArea() {
   welcomeEl.classList.remove('hidden');
   messagesEl.classList.add('hidden');
   exportBtn.classList.add('hidden');
+  if (shareBtn) shareBtn.classList.add('hidden');
 }
 
 function updateCharCounter() {
@@ -915,6 +920,7 @@ async function switchSession(id) {
       welcomeEl.classList.add('hidden');
       messagesEl.classList.remove('hidden');
       exportBtn.classList.remove('hidden');
+      if (shareBtn) shareBtn.classList.remove('hidden');
       for (let i = 0; i < session.messages.length; i++) {
         const m = session.messages[i];
         const isLast = i === session.messages.length - 1;
@@ -1816,54 +1822,241 @@ function beginEdit(bubble) {
 }
 
 // ── Export conversation as Markdown ────────────────────────────────
+function downloadFile(name, content, mime) {
+  const blob = new Blob([content], { type: (mime || 'text/plain') + ';charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function safeFilename(s) {
+  return (s || 'chat').replace(/[^a-zA-Z0-9-_]+/g, '-').slice(0, 60);
+}
+
+function exportAsMarkdown(session) {
+  const lines = [];
+  lines.push('# ' + (session.title || 'Chat export'));
+  lines.push('');
+  lines.push('*Exported ' + new Date().toISOString() + '*');
+  lines.push('');
+  lines.push('**System prompt:**');
+  lines.push('');
+  lines.push('> ' + (session.system_prompt || '').replace(/\n/g, '\n> '));
+  if (session.model) {
+    lines.push('');
+    lines.push('**Model:** `' + session.model + '`');
+  }
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+  for (const m of (session.messages || [])) {
+    const role = m.role === 'user' ? '**You**' : '**Assistant**';
+    const time = m.created_at ? ' *(' + formatTime(m.created_at) + ')*' : '';
+    const tk = m.tokens ? ' *[' + m.tokens + ' tok]*' : '';
+    lines.push(role + time + tk + ':');
+    lines.push('');
+    lines.push(m.content);
+    if (m.blocked) {
+      lines.push('');
+      lines.push('> ⚠️ Blocked by guardrail: ' + (m.reason || 'unknown'));
+    }
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function exportAsHtml(session) {
+  const title = escapeHtml(session.title || 'Chat export');
+  const sp = escapeHtml(session.system_prompt || '');
+  let body = '';
+  for (const m of (session.messages || [])) {
+    const role = m.role === 'user' ? 'user' : 'assistant';
+    const time = m.created_at ? new Date(m.created_at).toISOString() : '';
+    const tk = m.tokens ? ' <span class="tok">[' + m.tokens + ' tok]</span>' : '';
+    const content = m.content
+      .split('\n\n').map(p => '<p>' + escapeHtml(p).replace(/\n/g, '<br>') + '</p>').join('');
+    body += '<div class="msg ' + role + '"><div class="role">' + role + (time ? ' <span class="time">' + time + '</span>' : '') + tk + '</div><div class="content">' + content + '</div></div>';
+  }
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${title}</title>
+<style>
+body { font: 14px/1.5 -apple-system, Segoe UI, sans-serif; max-width: 720px; margin: 2em auto; padding: 0 1em; background: #fafafa; color: #222; }
+h1 { border-bottom: 1px solid #ccc; padding-bottom: 0.3em; }
+.system { background: #f3f0ff; border-left: 3px solid #7c5cff; padding: 0.6em 1em; margin: 1em 0; color: #444; font-style: italic; }
+.msg { background: #fff; border: 1px solid #e5e5e5; border-radius: 6px; margin: 1em 0; padding: 0.8em 1em; }
+.msg.user { background: #f5f1ff; }
+.role { font-weight: 600; text-transform: capitalize; color: #555; font-size: 12px; margin-bottom: 0.5em; }
+.role .time { font-weight: 400; color: #999; }
+.role .tok { font-weight: 400; color: #888; font-size: 11px; }
+.content p { margin: 0.3em 0; white-space: pre-wrap; word-wrap: break-word; }
+.meta { color: #999; font-size: 11px; }
+</style></head><body>
+<h1>${title}</h1>
+<p class="meta">Exported ${new Date().toISOString()}</p>
+<div class="system"><strong>System prompt:</strong> ${sp}</div>
+${body}
+</body></html>`;
+}
+
 function exportConversation() {
   if (!currentSessionId) return;
   fetch('/api/sessions/' + encodeURIComponent(currentSessionId))
     .then(r => r.json())
     .then(session => {
-      const lines = [];
-      lines.push('# ' + (session.title || 'Chat export'));
-      lines.push('');
-      lines.push('*Exported ' + new Date().toISOString() + '*');
-      lines.push('');
-      lines.push('**System prompt:**');
-      lines.push('');
-      lines.push('> ' + (session.system_prompt || '').replace(/\n/g, '\n> '));
-      if (session.model) {
-        lines.push('');
-        lines.push('**Model:** `' + session.model + '`');
+      const format = window.prompt('Export format: md / html / json', 'md');
+      if (!format) return;
+      const f = format.toLowerCase();
+      const base = safeFilename(session.title);
+      if (f === 'md' || f === 'markdown') {
+        downloadFile(base + '.md', exportAsMarkdown(session), 'text/markdown');
+      } else if (f === 'html') {
+        downloadFile(base + '.html', exportAsHtml(session), 'text/html');
+      } else if (f === 'json') {
+        downloadFile(base + '.json', JSON.stringify(session, null, 2), 'application/json');
+      } else {
+        window.alert('Unknown format: ' + format + '. Use md, html, or json.');
       }
-      lines.push('');
-      lines.push('---');
-      lines.push('');
-      for (const m of (session.messages || [])) {
-        const role = m.role === 'user' ? '**You**' : '**Assistant**';
-        const time = m.created_at ? ' *(' + formatTime(m.created_at) + ')*' : '';
-        const tk = m.tokens ? ' *[' + m.tokens + ' tok]*' : '';
-        lines.push(role + time + tk + ':');
-        lines.push('');
-        lines.push(m.content);
-        if (m.blocked) {
-          lines.push('');
-          lines.push('> ⚠️ Blocked by guardrail: ' + (m.reason || 'unknown'));
-        }
-        lines.push('');
-      }
-      const md = lines.join('\n');
-      const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = (session.title || 'chat').replace(/[^a-zA-Z0-9-_]+/g, '-').slice(0, 60) + '.md';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
     })
     .catch(err => console.error('Export failed:', err));
 }
 
+// Share via static link: writes the current session to data/shared/<id>.json
+// and returns a relative URL anyone with server access can fetch as read-only JSON
+async function shareSession() {
+  if (!currentSessionId) return;
+  try {
+    const r = await fetch('/api/sessions/' + encodeURIComponent(currentSessionId) + '/share', { method: 'POST' });
+    if (!r.ok) { window.alert('Share failed: HTTP ' + r.status); return; }
+    const data = await r.json();
+    const url = window.location.origin + data.url;
+    try { await navigator.clipboard.writeText(url); } catch (_) {}
+    window.prompt('Shareable link (copied to clipboard if allowed):', url);
+  } catch (err) { window.alert('Share failed: ' + err.message); }
+}
+
+async function importConversation(text) {
+  // Try to detect ChatGPT, Claude, or generic JSON
+  let sessionData;
+  try {
+    const parsed = JSON.parse(text);
+    sessionData = parseImport(parsed);
+  } catch (e) {
+    window.alert('Import error: not valid JSON. ' + e.message);
+    return;
+  }
+  if (!sessionData) { window.alert('Could not detect any chat format in the file.'); return; }
+  try {
+    const r = await fetch('/api/sessions/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sessionData),
+    });
+    if (!r.ok) { window.alert('Import failed: HTTP ' + r.status); return; }
+    const s = await r.json();
+    await loadSessions();
+    await switchSession(s.id);
+    window.alert('Imported as "' + s.title + '"');
+  } catch (err) { window.alert('Import failed: ' + err.message); }
+}
+
+function parseImport(obj) {
+  // ChatGPT export: { title, mapping: { nodeId: { message: { author: {role}, content: {parts:[]}, create_time } } } }
+  if (obj && obj.mapping && typeof obj.mapping === 'object') {
+    const messages = [];
+    const byId = obj.mapping;
+    // BFS from root
+    const roots = Object.values(byId).filter(n => !n.parent || n.parent === null || !byId[n.parent]);
+    let order = roots;
+    for (const r of order) {
+      const walk = (n) => {
+        if (n.message && n.message.content && n.message.content.parts) {
+          const role = n.message.author && n.message.author.role;
+          if (role === 'user' || role === 'assistant') {
+            const content = (n.message.content.parts || []).filter(p => typeof p === 'string').join('\n');
+            if (content.trim()) {
+              messages.push({
+                role,
+                content,
+                created_at: (n.message.create_time || 0) * 1000,
+              });
+            }
+          }
+        }
+        if (n.children && n.children.length) for (const c of n.children) walk(byId[c]);
+      };
+      walk(r);
+    }
+    return {
+      title: obj.title || 'Imported ChatGPT',
+      messages,
+    };
+  }
+  // Claude.ai export: { chat_messages: [{ sender: "human"|"assistant", text, created_at }] } or { messages: [...] }
+  if (obj && Array.isArray(obj.chat_messages)) {
+    return {
+      title: obj.name || 'Imported Claude',
+      messages: obj.chat_messages.map(m => ({
+        role: m.sender === 'human' ? 'user' : 'assistant',
+        content: m.text || '',
+        created_at: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+      })),
+    };
+  }
+  // Generic chatbot-app format
+  if (obj && Array.isArray(obj.messages)) {
+    return {
+      title: obj.title || 'Imported session',
+      system_prompt: obj.system_prompt,
+      model: obj.model,
+      messages: obj.messages.map(m => ({
+        role: m.role,
+        content: m.content || '',
+        created_at: m.created_at || Date.now(),
+      })),
+    };
+  }
+  // Bare array
+  if (Array.isArray(obj)) {
+    return {
+      title: 'Imported session',
+      messages: obj.map(m => ({
+        role: m.role,
+        content: m.content || m.text || '',
+        created_at: m.created_at || Date.now(),
+      })),
+    };
+  }
+  return null;
+}
+
 if (exportBtn) exportBtn.addEventListener('click', exportConversation);
+if (shareBtn) shareBtn.addEventListener('click', shareSession);
+if (importBtn) {
+  importBtn.addEventListener('click', () => importFile.click());
+}
+if (importFile) {
+  importFile.addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    try {
+      const text = await f.text();
+      await importConversation(text);
+    } catch (err) {
+      window.alert('Could not read file: ' + err.message);
+    } finally {
+      importFile.value = ''; // reset so the same file can be picked again
+    }
+  });
+}
 
 // ── Slash commands + command palette ───────────────────────────────
 const paletteBackdrop = document.getElementById('paletteBackdrop');
@@ -1883,7 +2076,9 @@ const COMMANDS = [
       const titleBtn = li && li.querySelector('.session-title');
       if (titleBtn) beginRename(li, titleBtn, currentSessionId);
     } },
-  { cmd: '/export', name: 'Export current chat as Markdown', run: () => exportConversation() },
+  { cmd: '/export', name: 'Export current chat (md/html/json)', run: () => exportConversation() },
+  { cmd: '/share', name: 'Share current chat as a static link', run: () => shareSession() },
+  { cmd: '/import', name: 'Open the file picker to import a chat', run: () => importFile && importFile.click() },
   { cmd: '/theme', name: 'Toggle dark/light theme', run: () => { const t = document.documentElement.getAttribute('data-theme') || 'dark'; applyTheme(t === 'dark' ? 'light' : 'dark'); saveSettings(); } },
   { cmd: '/settings', name: 'Open settings panel', run: () => settingsPanel.classList.toggle('open') },
   { cmd: '/shortcuts', name: 'Show keyboard shortcuts', run: () => openShortcuts() },

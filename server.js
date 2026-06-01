@@ -4,6 +4,7 @@
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs');
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const { version } = require('./package.json');
@@ -660,6 +661,68 @@ app.post('/api/chat/continue', rateLimit, async (req, res) => {
 app.delete('/api/sessions/:id', (req, res) => {
   db.deleteSession(req.params.id);
   res.json({ ok: true });
+});
+
+app.post('/api/sessions/import', (req, res) => {
+  const body = req.body || {};
+  if (!Array.isArray(body.messages) || body.messages.length === 0) {
+    return res.status(400).json({ error: 'messages array required' });
+  }
+  const MAX = 200;
+  const safeMsgs = body.messages.slice(0, MAX).map(m => ({
+    role: m.role === 'assistant' ? 'assistant' : 'user',
+    content: String(m.content || '').slice(0, 16000),
+    created_at: Number(m.created_at) || Date.now(),
+  }));
+  try {
+    const session = db.createSession({
+      title: body.title || 'Imported',
+      system_prompt: body.system_prompt || 'You are a helpful assistant.',
+      model: body.model || null,
+    });
+    for (const m of safeMsgs) db.addMessage(session.id, m);
+    res.status(201).json(db.getSession(session.id));
+  } catch (err) {
+    if (err.code === 'SESSION_TOO_LARGE') return res.status(413).json({ error: 'Imported chat too large' });
+    throw err;
+  }
+});
+
+app.post('/api/sessions/:id/share', (req, res) => {
+  const SHARE_DIR = path.join(__dirname, 'data', 'shared');
+  fs.mkdirSync(SHARE_DIR, { recursive: true });
+  let session;
+  try { session = db.getSession(req.params.id); }
+  catch (err) {
+    if (err.code === 'SESSION_NOT_FOUND') return res.status(404).json({ error: 'Session not found' });
+    throw err;
+  }
+  // Strip internal fields and reactions before sharing
+  const safe = {
+    title: session.title,
+    system_prompt: session.system_prompt,
+    model: session.model,
+    created_at: session.created_at,
+    updated_at: session.updated_at,
+    messages: (session.messages || []).map(m => ({
+      role: m.role,
+      content: m.content,
+      created_at: m.created_at,
+    })),
+  };
+  const shareId = session.id;
+  fs.writeFileSync(path.join(SHARE_DIR, shareId + '.json'), JSON.stringify(safe, null, 2));
+  res.json({ ok: true, url: '/api/shared/' + shareId });
+});
+
+app.get('/api/shared/:id', (req, res) => {
+  const SHARE_DIR = path.join(__dirname, 'data', 'shared');
+  const filepath = path.join(SHARE_DIR, req.params.id + '.json');
+  if (!filepath.startsWith(SHARE_DIR) || !fs.existsSync(filepath)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.setHeader('Content-Type', 'application/json');
+  res.send(fs.readFileSync(filepath, 'utf-8'));
 });
 
 // ═══════════════════════════════════════════════════════════════════════

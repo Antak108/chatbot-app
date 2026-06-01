@@ -432,7 +432,7 @@ body {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  flex: 1;
+  flex: 0 0 auto;
   transition: var(--transition);
 }
 
@@ -1336,6 +1336,20 @@ kbd {
 }
 .session-item.dragging { opacity: 0.4; }
 .session-item.drag-over { border-top: 2px solid var(--accent); }
+
+/* ── Sidebar import button ────────────────────────────────────────── */
+.import-btn {
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: inherit;
+  margin-left: 4px;
+}
+.import-btn:hover { background: var(--bg-glass-hover); border-color: var(--accent); }
 
 /* ── Memory list (settings) ──────────────────────────────────────── */
 .memory-list {
