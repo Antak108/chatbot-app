@@ -204,5 +204,21 @@
       <button class="palette-close" id="shortcutsClose" type="button">Close</button>
     </div>
   </div>
+
+  <!-- Global search modal (Ctrl/Cmd+F) -->
+  <div class="palette-backdrop hidden" id="searchBackdrop">
+    <div class="search-modal" role="dialog" aria-label="Search messages">
+      <div class="search-bar">
+        <input type="search" id="searchInput" placeholder="Search all messages&hellip;" autocomplete="off" />
+        <select id="searchRole" title="Role">
+          <option value="">All</option>
+          <option value="user">User</option>
+          <option value="assistant">Assistant</option>
+        </select>
+      </div>
+      <ul class="search-results" id="searchResults" role="listbox"></ul>
+      <div class="palette-hint" id="searchHint">Type to search &middot; click a result to jump &middot; esc close</div>
+    </div>
+  </div>
 </body>
 </html>

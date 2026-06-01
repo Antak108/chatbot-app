@@ -420,6 +420,48 @@ app.get('/api/sessions', (_req, res) => {
   res.json(db.listSessions());
 });
 
+app.get('/api/search', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const role = String(req.query.role || '').toLowerCase(); // 'user' | 'assistant' | ''
+  const tag = String(req.query.tag || '').trim();
+  const since = parseInt(req.query.since, 10) || 0;
+  const until = parseInt(req.query.until, 10) || 0;
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  if (!q && !role && !tag && !since && !until) {
+    return res.json({ q, role, tag, since, until, limit, results: [] });
+  }
+  const needle = q.toLowerCase();
+  const results = [];
+  for (const meta of db.listSessions()) {
+    let session;
+    try { session = db.getSession(meta.id); } catch (_) { continue; }
+    const titleMatch = !needle || (session.title || '').toLowerCase().includes(needle);
+    let matchIn = titleMatch ? 'title' : null;
+    for (let i = 0; i < session.messages.length; i++) {
+      const m = session.messages[i];
+      if (role && m.role !== role) continue;
+      if (needle && !(m.content || '').toLowerCase().includes(needle)) continue;
+      if (tag && !(session.tags || []).map(t => t.toLowerCase()).includes(tag.toLowerCase())) continue;
+      if (since && (m.created_at || 0) < since) continue;
+      if (until && (m.created_at || 0) > until) continue;
+      if (results.length >= limit) break;
+      const start = Math.max(0, (m.content || '').toLowerCase().indexOf(needle) - 30);
+      const end = Math.min((m.content || '').length, start + 220);
+      results.push({
+        session_id: session.id,
+        session_title: session.title || 'Untitled',
+        message_id: m.id,
+        role: m.role,
+        created_at: m.created_at,
+        snippet: (m.content || '').slice(start, end),
+      });
+      matchIn = matchIn || 'message';
+    }
+    if (matchIn && results.length >= limit) break;
+  }
+  res.json({ q, role, tag, since, until, limit, results });
+});
+
 app.post('/api/sessions', (req, res) => {
   const { system_prompt, title, model } = req.body || {};
   const session = db.createSession({ system_prompt, title, model });

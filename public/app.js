@@ -36,6 +36,10 @@ const sidebarRetry = document.getElementById('sidebarRetry');
 const sidebarSearchWrap = document.getElementById('sidebarSearchWrap');
 const sidebarSearch = document.getElementById('sidebarSearch');
 const sidebarSearchBtn = document.getElementById('sidebarSearchBtn');
+const searchBackdrop = document.getElementById('searchBackdrop');
+const searchInput = document.getElementById('searchInput');
+const searchRole = document.getElementById('searchRole');
+const searchResults = document.getElementById('searchResults');
 const exportBtn = document.getElementById('exportBtn');
 const quickPrompts = document.getElementById('quickPrompts');
 const attachBtn = document.getElementById('attachBtn');
@@ -626,14 +630,8 @@ settingsBtn.addEventListener('click', () => settingsPanel.classList.toggle('open
 
 // ── Sidebar search toggle ───────────────────────────────────────────
 sidebarSearchBtn.addEventListener('click', () => {
-  sidebarSearchWrap.classList.toggle('hidden');
-  if (!sidebarSearchWrap.classList.contains('hidden')) {
-    sidebarSearch.focus();
-  } else {
-    sidebarSearch.value = '';
-    sessionFilter = '';
-    renderSessionList();
-  }
+  // Open the global search modal (Cmd/Ctrl+F equivalent)
+  openSearch();
 });
 sidebarSearch.addEventListener('input', () => {
   sessionFilter = sidebarSearch.value.toLowerCase().trim();
@@ -979,6 +977,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (!paletteBackdrop.classList.contains('hidden')) { closePalette(); return; }
     if (!shortcutsBackdrop.classList.contains('hidden')) { closeShortcuts(); return; }
+    if (!searchBackdrop.classList.contains('hidden')) { closeSearch(); return; }
     closeSidebar();
     settingsPanel.classList.remove('open');
     if (!sidebarSearchWrap.classList.contains('hidden')) {
@@ -993,6 +992,12 @@ document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     openPalette();
+    return;
+  }
+  // Ctrl/Cmd+F: global search
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    openSearch();
     return;
   }
   // Ctrl/Cmd+/: toggle theme
@@ -1022,6 +1027,92 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 });
+
+// ── Global search modal ─────────────────────────────────────────────
+let searchDebounce = null;
+function openSearch() {
+  searchBackdrop.classList.remove('hidden');
+  searchInput.value = '';
+  searchRole.value = '';
+  searchResults.innerHTML = '';
+  setTimeout(() => searchInput.focus(), 30);
+}
+function closeSearch() {
+  searchBackdrop.classList.add('hidden');
+  if (searchDebounce) clearTimeout(searchDebounce);
+}
+searchBackdrop.addEventListener('click', (e) => { if (e.target === searchBackdrop) closeSearch(); });
+function triggerSearch() {
+  if (searchDebounce) clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(runSearch, 200);
+}
+searchInput.addEventListener('input', triggerSearch);
+searchRole.addEventListener('change', runSearch);
+
+async function runSearch() {
+  const q = searchInput.value.trim();
+  const role = searchRole.value;
+  if (!q && !role) { searchResults.innerHTML = ''; return; }
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (role) params.set('role', role);
+  try {
+    const r = await fetch('/api/search?' + params.toString());
+    if (!r.ok) return;
+    const data = await r.json();
+    renderSearchResults(data.results, q);
+  } catch (err) { console.error('Search failed:', err); }
+}
+
+function renderSearchResults(results, q) {
+  searchResults.innerHTML = '';
+  if (!results.length) {
+    const li = document.createElement('li');
+    li.className = 'search-empty';
+    li.textContent = 'No matches.';
+    searchResults.appendChild(li);
+    return;
+  }
+  for (const hit of results) {
+    const li = document.createElement('li');
+    li.className = 'search-hit';
+    li.setAttribute('role', 'option');
+    li.dataset.sessionId = hit.session_id;
+    li.dataset.messageId = hit.message_id;
+    const header = document.createElement('div');
+    header.className = 'search-hit-header';
+    const title = document.createElement('span');
+    title.className = 'search-hit-title';
+    title.textContent = hit.session_title;
+    const role = document.createElement('span');
+    role.className = 'search-hit-role ' + hit.role;
+    role.textContent = hit.role;
+    const date = document.createElement('span');
+    date.className = 'search-hit-date';
+    date.textContent = new Date(hit.created_at).toLocaleString();
+    header.appendChild(title);
+    header.appendChild(role);
+    header.appendChild(date);
+    const body = document.createElement('div');
+    body.className = 'search-hit-snippet';
+    body.textContent = hit.snippet;
+    li.appendChild(header);
+    li.appendChild(body);
+    li.addEventListener('click', async () => {
+      closeSearch();
+      await switchSession(hit.session_id);
+      setTimeout(() => {
+        const el = document.querySelector('.msg[data-id="' + CSS.escape(hit.message_id) + '"]');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.add('msg-highlight');
+          setTimeout(() => el.classList.remove('msg-highlight'), 1800);
+        }
+      }, 200);
+    });
+    searchResults.appendChild(li);
+  }
+}
 
 userInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
