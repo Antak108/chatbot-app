@@ -10,6 +10,7 @@ const { version } = require('./package.json');
 const guardrails = require('./guardrails');
 const db = require('./db');
 const memory = require('./memory');
+const templates = require('./templates');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -437,9 +438,15 @@ app.get('/api/sessions/:id', (req, res) => {
 });
 
 app.patch('/api/sessions/:id', (req, res) => {
-  const { title } = req.body || {};
+  const { title, pinned, tags, order, archived } = req.body || {};
   try {
-    const session = db.renameSession(req.params.id, { title });
+    let session;
+    if (title !== undefined) {
+      session = db.renameSession(req.params.id, { title });
+    }
+    if (pinned !== undefined || tags !== undefined || order !== undefined || archived !== undefined) {
+      session = db.updateSessionMeta(req.params.id, { pinned, tags, order, archived });
+    }
     res.json(session);
   } catch (err) {
     if (err.code === 'SESSION_NOT_FOUND') {
@@ -680,6 +687,24 @@ app.delete('/api/memory/:index', (req, res) => {
 
 app.post('/api/memory/clear', (_req, res) => {
   res.json(memory.clear());
+});
+
+// ─── Templates API (system-prompt presets) ─────────────────────────
+app.get('/api/templates', (_req, res) => {
+  res.json(templates.list());
+});
+
+app.post('/api/templates', (req, res) => {
+  const { name, description, system_prompt } = req.body || {};
+  if (!system_prompt) return res.status(400).json({ error: 'system_prompt required' });
+  const t = templates.create({ name, description, system_prompt });
+  res.status(201).json(t);
+});
+
+app.delete('/api/templates/:id', (req, res) => {
+  const ok = templates.remove(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Template not found' });
+  res.json({ ok: true });
 });
 
 // ─── Health check ────────────────────────────────────────────────────

@@ -66,6 +66,10 @@ function listSessions() {
         created_at: data.created_at,
         updated_at: data.updated_at,
         message_count: Array.isArray(data.messages) ? data.messages.length : 0,
+        pinned: !!data.pinned,
+        tags: Array.isArray(data.tags) ? data.tags : [],
+        order: typeof data.order === 'number' ? data.order : null,
+        archived: !!data.archived,
       });
     } catch (err) {
       console.error(JSON.stringify({ event: 'session_quarantined', file: f, error: err.message }));
@@ -73,7 +77,11 @@ function listSessions() {
     }
   }
 
-  items.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  items.sort((a, b) => {
+    if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+    if (a.order !== null && b.order !== null) return a.order - b.order;
+    return (b.updated_at || 0) - (a.updated_at || 0);
+  });
   sessionListCache = items;
   return items;
 }
@@ -119,6 +127,34 @@ function renameSession(id, { title } = {}) {
   const session = getSession(id);
   if (title !== undefined && String(title).trim() !== '') {
     session.title = String(title).trim();
+  }
+  session.updated_at = Date.now();
+  atomicWriteSync(
+    path.join(DB_DIR, `${id}.json`),
+    JSON.stringify(session, null, 2),
+  );
+  invalidateCache();
+  return session;
+}
+
+function updateSessionMeta(id, patch) {
+  const session = getSession(id);
+  if (patch.pinned !== undefined) session.pinned = !!patch.pinned;
+  if (patch.tags !== undefined) {
+    if (Array.isArray(patch.tags)) {
+      session.tags = patch.tags.map(t => String(t).trim()).filter(t => t).slice(0, 20);
+    } else {
+      delete session.tags;
+    }
+  }
+  if (patch.order !== undefined) {
+    const n = parseInt(patch.order, 10);
+    if (!Number.isNaN(n)) session.order = n;
+  }
+  if (patch.archived !== undefined) {
+    session.archived = !!patch.archived;
+    if (patch.archived) session.archived_at = Date.now();
+    else delete session.archived_at;
   }
   session.updated_at = Date.now();
   atomicWriteSync(
@@ -293,6 +329,7 @@ module.exports = {
   createSession,
   deleteSession,
   renameSession,
+  updateSessionMeta,
   addMessage,
   getMessages,
   popLastMessage,

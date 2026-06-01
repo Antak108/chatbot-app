@@ -260,6 +260,41 @@ if (memoryClearBtn) {
   });
 }
 
+// ── Templates (system-prompt presets, with persistence) ───────────
+const templateSelect = document.getElementById('templateSelect');
+const templateNote = document.getElementById('templateNote');
+
+async function loadTemplates() {
+  try {
+    const r = await fetch('/api/templates');
+    if (!r.ok) return;
+    const list = await r.json();
+    templateSelect.innerHTML = '<option value="">\u2014 pick a template \u2014</option>';
+    for (const t of list) {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = t.name;
+      opt.dataset.prompt = t.system_prompt;
+      opt.dataset.description = t.description || '';
+      templateSelect.appendChild(opt);
+    }
+  } catch (err) { console.error('Template load failed:', err); }
+}
+
+if (templateSelect) {
+  templateSelect.addEventListener('change', () => {
+    const opt = templateSelect.options[templateSelect.selectedIndex];
+    const prompt = opt && opt.dataset.prompt;
+    if (prompt) {
+      systemPromptEl.value = prompt;
+      saveSettings();
+    }
+    if (templateNote) {
+      templateNote.textContent = (opt && opt.dataset.description) || '';
+    }
+  });
+}
+
 // ── File attachments (upload, drag-drop, paste) ────────────────────
 async function handleFile(file) {
   if (!file) return;
@@ -645,9 +680,28 @@ function renderSessionList() {
   }
   for (const s of filtered) {
     const li = document.createElement('li');
-    li.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
+    li.className = 'session-item' + (s.id === currentSessionId ? ' active' : '') + (s.pinned ? ' pinned' : '');
     li.dataset.id = s.id;
     li.setAttribute('role', 'listitem');
+    li.draggable = true;
+
+    const starBtn = document.createElement('button');
+    starBtn.type = 'button';
+    starBtn.className = 'session-star';
+    starBtn.textContent = s.pinned ? '\u2605' : '\u2606';
+    starBtn.setAttribute('aria-label', s.pinned ? 'Unpin' : 'Pin');
+    starBtn.title = s.pinned ? 'Unpin' : 'Pin to top';
+    starBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        await fetch('/api/sessions/' + encodeURIComponent(s.id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinned: !s.pinned }),
+        });
+        await loadSessions();
+      } catch (err) { console.error('Pin failed:', err); }
+    });
 
     const titleBtn = document.createElement('button');
     titleBtn.type = 'button';
@@ -660,17 +714,126 @@ function renderSessionList() {
       beginRename(li, titleBtn, s.id);
     });
 
+    const actions = document.createElement('span');
+    actions.className = 'session-actions';
+
+    const tagBtn = document.createElement('button');
+    tagBtn.type = 'button';
+    tagBtn.className = 'session-action-btn';
+    tagBtn.textContent = '\u2691';
+    tagBtn.setAttribute('aria-label', 'Edit tags');
+    tagBtn.title = 'Edit tags';
+    tagBtn.addEventListener('click', (e) => { e.stopPropagation(); beginEditTags(li, s); });
+    actions.appendChild(tagBtn);
+
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
     delBtn.className = 'session-delete';
     delBtn.setAttribute('aria-label', 'Delete ' + (s.title || 'session'));
     delBtn.textContent = '\u00D7';
     delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteSession(s.id); });
+    actions.appendChild(delBtn);
 
+    li.appendChild(starBtn);
     li.appendChild(titleBtn);
-    li.appendChild(delBtn);
+    li.appendChild(actions);
+
+    if (s.tags && s.tags.length) {
+      const tagsRow = document.createElement('span');
+      tagsRow.className = 'session-tags';
+      s.tags.forEach(t => {
+        const tag = document.createElement('span');
+        tag.className = 'session-tag';
+        tag.textContent = '#' + t;
+        tagsRow.appendChild(tag);
+      });
+      li.appendChild(tagsRow);
+    }
+
+    attachDragHandlers(li, s);
     sessionListEl.appendChild(li);
   }
+}
+
+let dragSrcId = null;
+function attachDragHandlers(li, s) {
+  li.addEventListener('dragstart', (e) => {
+    dragSrcId = s.id;
+    li.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', s.id); } catch (_) {}
+  });
+  li.addEventListener('dragend', () => {
+    li.classList.remove('dragging');
+    document.querySelectorAll('.session-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+    dragSrcId = null;
+  });
+  li.addEventListener('dragover', (e) => {
+    if (!dragSrcId || dragSrcId === s.id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    li.classList.add('drag-over');
+  });
+  li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
+  li.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    li.classList.remove('drag-over');
+    if (!dragSrcId || dragSrcId === s.id) return;
+    // Reorder: put dragSrc immediately before this session.
+    const ordered = sessions.slice();
+    const srcIdx = ordered.findIndex(x => x.id === dragSrcId);
+    const dstIdx = ordered.findIndex(x => x.id === s.id);
+    if (srcIdx < 0 || dstIdx < 0) return;
+    const [moved] = ordered.splice(srcIdx, 1);
+    const newIdx = ordered.findIndex(x => x.id === s.id);
+    ordered.splice(newIdx, 0, moved);
+    // Assign order values to all; pinned items keep top, others fall through.
+    let order = 0;
+    for (const sess of ordered) {
+      if (sess.pinned) continue;
+      try {
+        await fetch('/api/sessions/' + encodeURIComponent(sess.id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order: order++ }),
+        });
+      } catch (err) { console.error('Reorder failed:', err); }
+    }
+    await loadSessions();
+  });
+}
+
+function beginEditTags(li, s) {
+  const existing = (s.tags || []).join(', ');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'session-tag-input';
+  input.placeholder = 'comma,separated,tags';
+  input.value = existing;
+  const tagsRow = li.querySelector('.session-tags');
+  if (tagsRow) li.removeChild(tagsRow);
+  li.appendChild(input);
+  input.focus();
+  const finish = async (save) => {
+    if (!save) {
+      await loadSessions();
+      return;
+    }
+    const tags = input.value.split(',').map(t => t.trim()).filter(Boolean).slice(0, 20);
+    try {
+      await fetch('/api/sessions/' + encodeURIComponent(s.id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags }),
+      });
+      await loadSessions();
+    } catch (err) { console.error('Tag update failed:', err); }
+  };
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
 }
 
 function beginRename(li, titleBtn, id) {
@@ -1671,6 +1834,26 @@ const COMMANDS = [
       sendCommandMessage('Forgotten #' + (idx + 1));
       renderMemory();
     } },
+  { cmd: '/template', name: 'Apply a template by name (e.g. /template tutor)', run: async (text) => {
+      const arg = text.replace(/^\/template\s+/i, '').trim();
+      if (!arg) { sendCommandMessage('Usage: /template <name>'); return; }
+      try {
+        const r = await fetch('/api/templates');
+        const list = await r.json();
+        const found = list.find(t => t.id === arg || t.name.toLowerCase().includes(arg.toLowerCase()));
+        if (!found) { sendCommandMessage('No template matching: ' + arg); return; }
+        systemPromptEl.value = found.system_prompt;
+        if (templateSelect) {
+          const opt = Array.from(templateSelect.options).find(o => o.value === found.id);
+          if (opt) {
+            templateSelect.value = found.id;
+            if (templateNote) templateNote.textContent = found.description || '';
+          }
+        }
+        saveSettings();
+        sendCommandMessage('\u2713 Template applied: ' + found.name);
+      } catch (err) { sendCommandMessage('Template apply failed: ' + err.message); }
+    } },
 ];
 
 async function sendCommandMessage(text) {
@@ -1805,5 +1988,6 @@ slashMenu.addEventListener('mousedown', (e) => e.preventDefault());
     await switchSession(lastId);
   }
   await renderMemory();
+  await loadTemplates();
   updateCharCounter();
 })();
