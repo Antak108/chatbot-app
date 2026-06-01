@@ -21,6 +21,11 @@ const topKEl = document.getElementById('topK');
 const topKVal = document.getElementById('topKVal');
 const maxTokensEl = document.getElementById('maxTokens');
 const streamToggle = document.getElementById('streamToggle');
+const themeBtn = document.getElementById('themeBtn');
+const themeSelect = document.getElementById('themeSelect');
+const accentPicker = document.getElementById('accentPicker');
+const densitySelect = document.getElementById('densitySelect');
+const fontSizeSelect = document.getElementById('fontSizeSelect');
 const sidebarEl = document.getElementById('sidebar');
 const sessionListEl = document.getElementById('sessionList');
 const newChatBtn = document.getElementById('newChatBtn');
@@ -98,6 +103,10 @@ function loadSettings() {
     if (typeof s.topK === 'number') topKEl.value = s.topK;
     if (typeof s.maxTokens === 'number') maxTokensEl.value = s.maxTokens;
     if (typeof s.stream === 'boolean') streamToggle.checked = s.stream;
+    if (typeof s.theme === 'string') applyTheme(s.theme);
+    if (typeof s.accent === 'string') applyAccent(s.accent);
+    if (typeof s.density === 'string') applyDensity(s.density);
+    if (typeof s.fontSize === 'string') applyFontSize(s.fontSize);
   } catch (_) { /* ignore */ }
 }
 function saveSettings() {
@@ -110,6 +119,10 @@ function saveSettings() {
     topK: parseInt(topKEl.value, 10),
     maxTokens: parseInt(maxTokensEl.value, 10) || 0,
     stream: streamToggle.checked,
+    theme: document.documentElement.getAttribute('data-theme') || 'dark',
+    accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+    density: document.documentElement.getAttribute('data-density') || 'comfortable',
+    fontSize: document.documentElement.getAttribute('data-font-size') || 'medium',
   };
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (_) { /* ignore */ }
 }
@@ -120,6 +133,53 @@ streamToggle.addEventListener('change', saveSettings);
 systemPromptEl.addEventListener('input', saveSettings);
 presetSelect.addEventListener('change', saveSettings);
 modelSelect.addEventListener('change', saveSettings);
+
+// ── Appearance: theme, accent, density, font size ─────────────────
+function applyTheme(theme) {
+  const t = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  if (themeSelect) themeSelect.value = t;
+  if (themeBtn) themeBtn.textContent = t === 'light' ? '\u263D' : '\u2600';
+}
+function applyAccent(hex) {
+  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(hex || '')) return;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const root = document.documentElement.style;
+  root.setProperty('--accent', hex);
+  root.setProperty('--accent-glow', 'rgba(' + r + ',' + g + ',' + b + ',0.35)');
+  root.setProperty('--accent-surface', 'rgba(' + r + ',' + g + ',' + b + ',0.12)');
+  root.setProperty('--user-bubble', 'linear-gradient(135deg, ' + hex + ' 0%, #5c8aff 100%)');
+  if (accentPicker) accentPicker.value = hex.length === 4
+    ? '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3]
+    : hex;
+}
+function applyDensity(d) {
+  const v = d === 'compact' ? 'compact' : 'comfortable';
+  if (v === 'comfortable') document.documentElement.removeAttribute('data-density');
+  else document.documentElement.setAttribute('data-density', v);
+  if (densitySelect) densitySelect.value = v;
+}
+function applyFontSize(s) {
+  const allowed = ['small', 'medium', 'large'];
+  if (!allowed.includes(s)) s = 'medium';
+  if (s === 'medium') document.documentElement.removeAttribute('data-font-size');
+  else document.documentElement.setAttribute('data-font-size', s);
+  if (fontSizeSelect) fontSizeSelect.value = s;
+}
+
+if (themeBtn) {
+  themeBtn.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    applyTheme(current === 'dark' ? 'light' : 'dark');
+    saveSettings();
+  });
+}
+if (themeSelect) themeSelect.addEventListener('change', () => { applyTheme(themeSelect.value); saveSettings(); });
+if (accentPicker) accentPicker.addEventListener('input', () => { applyAccent(accentPicker.value); saveSettings(); });
+if (densitySelect) densitySelect.addEventListener('change', () => { applyDensity(densitySelect.value); saveSettings(); });
+if (fontSizeSelect) fontSizeSelect.addEventListener('change', () => { applyFontSize(fontSizeSelect.value); saveSettings(); });
 
 // ── Fetch available models ─────────────────────────────────────────
 async function loadModels() {
@@ -937,6 +997,11 @@ if (exportBtn) exportBtn.addEventListener('click', exportConversation);
 // ── Init ────────────────────────────────────────────────────────────
 (async function init() {
   await loadModels();
+  // If no theme set yet, follow OS preference
+  if (!document.documentElement.getAttribute('data-theme')) {
+    const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+    applyTheme(prefersLight ? 'light' : 'dark');
+  }
   loadSettings();
   updateParamDisplays();
   await loadSessions();

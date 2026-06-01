@@ -43,6 +43,7 @@
         </div>
         <div class="header-actions">
           <button class="header-btn hidden" id="exportBtn" type="button" aria-label="Export conversation" title="Export as Markdown">&darr;</button>
+          <button class="header-btn" id="themeBtn" type="button" aria-label="Toggle theme" title="Toggle theme">&#9788;</button>
           <button class="header-btn" id="sidebarSearchBtn" type="button" aria-label="Search chats" title="Search chats">&#128269;</button>
           <button class="header-btn" id="settingsBtn" type="button" aria-label="Settings" title="Settings">&#9881;&#65039;</button>
         </div>
@@ -81,6 +82,35 @@
           <label class="param-row">
             <span>Stream</span>
             <input type="checkbox" id="streamToggle" checked />
+          </label>
+        </details>
+        <details class="settings-advanced">
+          <summary>Appearance</summary>
+          <label class="param-row">
+            <span>Theme</span>
+            <select id="themeSelect">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </label>
+          <label class="param-row">
+            <span>Accent</span>
+            <input type="color" id="accentPicker" value="#7c5cff" />
+          </label>
+          <label class="param-row">
+            <span>Density</span>
+            <select id="densitySelect">
+              <option value="comfortable">Comfortable</option>
+              <option value="compact">Compact</option>
+            </select>
+          </label>
+          <label class="param-row">
+            <span>Font size</span>
+            <select id="fontSizeSelect">
+              <option value="medium">Medium</option>
+              <option value="small">Small</option>
+              <option value="large">Large</option>
+            </select>
           </label>
         </details>
       </div>

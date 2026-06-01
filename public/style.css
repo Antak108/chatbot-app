@@ -1,5 +1,6 @@
 /* ── Design Tokens ───────────────────────────────────────────────── */
 :root {
+  /* Dark theme (default) */
   --bg-primary: #0a0a0f;
   --bg-secondary: #12121a;
   --bg-glass: rgba(255, 255, 255, 0.04);
@@ -21,7 +22,37 @@
   --shadow-glow: 0 0 30px var(--accent-glow);
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --msg-font-size: 14px;
+  --msg-padding: 10px 14px;
+  --msg-gap: 8px;
 }
+
+:root[data-theme="light"] {
+  --bg-primary: #f6f7fb;
+  --bg-secondary: #ffffff;
+  --bg-glass: rgba(0, 0, 0, 0.03);
+  --bg-glass-hover: rgba(0, 0, 0, 0.06);
+  --border-glass: rgba(0, 0, 0, 0.08);
+  --text-primary: #14141c;
+  --text-secondary: #4a4a5c;
+  --text-muted: #8a8a9a;
+  --accent: #5b3aff;
+  --accent-glow: rgba(91, 58, 255, 0.18);
+  --accent-surface: rgba(91, 58, 255, 0.10);
+  --user-bubble: linear-gradient(135deg, #5b3aff 0%, #3a7bff 100%);
+  --bot-bubble: rgba(0, 0, 0, 0.04);
+  --danger: #d93d57;
+  --shadow-glow: 0 0 30px var(--accent-glow);
+}
+
+:root[data-density="compact"] {
+  --msg-font-size: 13px;
+  --msg-padding: 7px 11px;
+  --msg-gap: 5px;
+}
+
+:root[data-font-size="small"] { --msg-font-size: 13px; }
+:root[data-font-size="large"] { --msg-font-size: 16px; }
 
 /* ── Reset & Base ────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -43,6 +74,12 @@ body {
   background-image:
     radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124, 92, 255, 0.12), transparent),
     radial-gradient(ellipse 60% 40% at 80% 100%, rgba(92, 138, 255, 0.08), transparent);
+}
+
+:root[data-theme="light"] body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(91, 58, 255, 0.06), transparent),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(58, 123, 255, 0.05), transparent);
 }
 
 /* ── App Shell ───────────────────────────────────────────────────── */
@@ -800,6 +837,29 @@ body {
 }
 .param-row input[type="number"]:focus { border-color: var(--accent); }
 .param-row input[type="checkbox"] { width: 18px; height: 18px; grid-column: 2; justify-self: start; }
+.param-row input[type="color"] {
+  width: 40px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-glass);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  grid-column: 2;
+  justify-self: start;
+}
+.param-row select {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+  grid-column: 2 / 4;
+}
+.param-row select:focus { border-color: var(--accent); }
 
 /* ── Stop button ─────────────────────────────────────────────────── */
 .stop-btn {
@@ -850,10 +910,10 @@ body {
 .msg {
   position: relative;
   max-width: 85%;
-  padding: 10px 14px;
+  padding: var(--msg-padding);
   border-radius: 16px;
   line-height: 1.5;
-  font-size: 14px;
+  font-size: var(--msg-font-size);
   word-wrap: break-word;
   animation: bubble-in 0.2s ease;
 }
