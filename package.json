@@ -20,7 +20,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test guardrails.test.js",
-    "check": "node --check server.js db.js guardrails.js public/app.js",
+    "check": "node scripts/check.js",
     "eval": "npx promptfoo@latest eval",
     "eval:view": "npx promptfoo@latest view"
   },
