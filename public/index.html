@@ -95,6 +95,10 @@
             <span>Stream</span>
             <input type="checkbox" id="streamToggle" checked />
           </label>
+          <label class="param-row">
+            <span>Speak replies</span>
+            <input type="checkbox" id="ttsToggle" />
+          </label>
         </details>
         <details class="settings-advanced">
           <summary>Appearance</summary>
@@ -161,6 +165,7 @@
           <span class="char-counter" id="charCounter">0 / 2000</span>
         </div>
         <button class="attach-btn" id="attachBtn" type="button" aria-label="Attach file" title="Attach a file (TXT, MD, PDF, etc.)">&#128206;</button>
+        <button class="mic-btn" id="micBtn" type="button" aria-label="Voice input" title="Hold to dictate (Web Speech)">&#127908;</button>
         <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.markdown,.html,.htm,.csv,.json,.pdf,.log,text/*,application/pdf" />
         <button class="send-btn" id="sendBtn" type="button" aria-label="Send message">&#10148;</button>
         <button class="stop-btn hidden" id="stopBtn" type="button" aria-label="Stop generation">&#9632;</button>

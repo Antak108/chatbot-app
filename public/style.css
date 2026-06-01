@@ -1337,6 +1337,34 @@ kbd {
 .session-item.dragging { opacity: 0.4; }
 .session-item.drag-over { border-top: 2px solid var(--accent); }
 
+/* ── Mic button (voice input) ────────────────────────────────────── */
+.mic-btn {
+  background: transparent;
+  border: 1px solid var(--border-glass);
+  color: var(--text-muted);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  transition: all 0.15s;
+}
+.mic-btn:hover { color: var(--text-primary); border-color: var(--accent); }
+.mic-btn.listening {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+  animation: micPulse 1.2s infinite;
+}
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(220, 53, 69, 0); }
+}
+
 /* ── Sidebar import button ────────────────────────────────────────── */
 .import-btn {
   background: var(--bg-glass);

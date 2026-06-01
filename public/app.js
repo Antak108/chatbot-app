@@ -21,6 +21,7 @@ const topKEl = document.getElementById('topK');
 const topKVal = document.getElementById('topKVal');
 const maxTokensEl = document.getElementById('maxTokens');
 const streamToggle = document.getElementById('streamToggle');
+const ttsToggle = document.getElementById('ttsToggle');
 const themeBtn = document.getElementById('themeBtn');
 const themeSelect = document.getElementById('themeSelect');
 const accentPicker = document.getElementById('accentPicker');
@@ -46,6 +47,7 @@ const importBtn = document.getElementById('importBtn');
 const importFile = document.getElementById('importFile');
 const quickPrompts = document.getElementById('quickPrompts');
 const attachBtn = document.getElementById('attachBtn');
+const micBtn = document.getElementById('micBtn');
 const fileInput = document.getElementById('fileInput');
 const attachmentsEl = document.getElementById('attachments');
 const dropOverlay = document.getElementById('dropOverlay');
@@ -119,6 +121,7 @@ function loadSettings() {
     if (typeof s.topK === 'number') topKEl.value = s.topK;
     if (typeof s.maxTokens === 'number') maxTokensEl.value = s.maxTokens;
     if (typeof s.stream === 'boolean') streamToggle.checked = s.stream;
+    if (typeof s.tts === 'boolean' && ttsToggle) ttsToggle.checked = s.tts;
     if (typeof s.theme === 'string') applyTheme(s.theme);
     if (typeof s.accent === 'string') applyAccent(s.accent);
     if (typeof s.density === 'string') applyDensity(s.density);
@@ -135,6 +138,7 @@ function saveSettings() {
     topK: parseInt(topKEl.value, 10),
     maxTokens: parseInt(maxTokensEl.value, 10) || 0,
     stream: streamToggle.checked,
+    tts: ttsToggle ? ttsToggle.checked : false,
     theme: document.documentElement.getAttribute('data-theme') || 'dark',
     accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
     density: document.documentElement.getAttribute('data-density') || 'comfortable',
@@ -146,6 +150,7 @@ function saveSettings() {
   el.addEventListener('input', () => { updateParamDisplays(); saveSettings(); });
 });
 streamToggle.addEventListener('change', saveSettings);
+if (ttsToggle) ttsToggle.addEventListener('change', saveSettings);
 systemPromptEl.addEventListener('input', saveSettings);
 presetSelect.addEventListener('change', saveSettings);
 modelSelect.addEventListener('change', saveSettings);
@@ -427,6 +432,93 @@ userInput.addEventListener('paste', (e) => {
     }
   }
 });
+
+// ── Voice input (Web Speech API) ────────────────────────────────────
+let recognition = null;
+let isListening = false;
+let voiceBaseText = '';
+
+function initRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+  const r = new SR();
+  r.continuous = true;
+  r.interimResults = true;
+  r.lang = 'en-US';
+  r.onresult = (event) => {
+    let finalT = '';
+    let interimT = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const t = event.results[i][0].transcript;
+      if (event.results[i].isFinal) finalT += t;
+      else interimT += t;
+    }
+    if (finalT) voiceBaseText = (voiceBaseText + ' ' + finalT).trim();
+    userInput.value = (voiceBaseText + ' ' + interimT).trim();
+    autoResize(userInput);
+    updateCharCounter();
+  };
+  r.onerror = (e) => {
+    console.warn('Speech recognition error:', e.error);
+    stopListening();
+  };
+  r.onend = () => {
+    if (isListening) { // was kicked out unexpectedly
+      isListening = false;
+      micBtn.classList.remove('listening');
+    }
+  };
+  return r;
+}
+
+function startListening() {
+  if (!recognition) {
+    recognition = initRecognition();
+    if (!recognition) { addBubble('\u26A0\uFE0F Voice input not supported in this browser.', 'error'); return; }
+  }
+  try {
+    voiceBaseText = userInput.value;
+    recognition.start();
+    isListening = true;
+    micBtn.classList.add('listening');
+  } catch (err) {
+    console.warn('Could not start recognition:', err);
+  }
+}
+
+function stopListening() {
+  if (recognition) {
+    try { recognition.stop(); } catch (_) {}
+  }
+  isListening = false;
+  if (micBtn) micBtn.classList.remove('listening');
+}
+
+if (micBtn) {
+  micBtn.addEventListener('click', () => {
+    if (isListening) stopListening();
+    else startListening();
+  });
+}
+
+// ── TTS output (speechSynthesis) ────────────────────────────────────
+let ttsUtter = null;
+function speak(text) {
+  if (!('speechSynthesis' in window) || !ttsToggle || !ttsToggle.checked) return;
+  try { window.speechSynthesis.cancel(); } catch (_) {}
+  if (!text || !text.trim()) return;
+  ttsUtter = new SpeechSynthesisUtterance(text);
+  ttsUtter.rate = 1.0;
+  ttsUtter.pitch = 1.0;
+  ttsUtter.onend = () => { ttsUtter = null; };
+  ttsUtter.onerror = () => { ttsUtter = null; };
+  window.speechSynthesis.speak(ttsUtter);
+}
+
+function stopSpeaking() {
+  try { window.speechSynthesis.cancel(); } catch (_) {}
+  ttsUtter = null;
+}
 
 // ── Fetch available models ─────────────────────────────────────────
 async function loadModels() {
@@ -1412,6 +1504,16 @@ function finalizeBot(bubble, fullText) {
   initHighlight();
   if (content) postRender(content);
   delete bubble._streamBuf;
+  // TTS: speak the final reply (stripped of markdown noise for clarity)
+  if (ttsToggle && ttsToggle.checked) {
+    const plain = (fullText || (bubble._streamBuf || ''))
+      .replace(/```[\s\S]*?```/g, ' code block ')
+      .replace(/`[^`]+`/g, '')
+      .replace(/[#*_>~\-]+/g, ' ')
+      .replace(/\n+/g, '. ')
+      .trim();
+    speak(plain);
+  }
 }
 
 async function sendMessage() {
