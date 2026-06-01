@@ -117,6 +117,18 @@
             </select>
           </label>
         </details>
+        <details class="settings-advanced">
+          <summary>Long-term memory</summary>
+          <p class="settings-note" style="font-size:11px;color:var(--text-muted);margin:4px 0 8px;">Facts the chatbot will remember across all chats. Use <code>/remember</code> to add.</p>
+          <div class="memory-list" id="memoryList"></div>
+          <div class="memory-add">
+            <input type="text" id="memoryInput" placeholder="Add a fact&hellip;" maxlength="500" />
+            <button type="button" id="memoryAddBtn">Add</button>
+          </div>
+          <div class="memory-actions">
+            <button type="button" id="memoryClearBtn" class="danger">Clear all</button>
+          </div>
+        </details>
       </div>
 
       <div class="welcome" id="welcome">

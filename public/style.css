@@ -1192,6 +1192,85 @@ kbd {
 .slash-menu .slash-item .name { font-family: ui-monospace, monospace; color: var(--accent); }
 .slash-menu .slash-item .desc { color: var(--text-muted); font-size: 12px; }
 
+/* ── Memory list (settings) ──────────────────────────────────────── */
+.memory-list {
+  max-height: 160px;
+  overflow-y: auto;
+  margin: 6px 0;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+.memory-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  gap: 8px;
+}
+.memory-item:last-child { border-bottom: none; }
+.memory-item .text { flex: 1; word-break: break-word; }
+.memory-item .forget {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+}
+.memory-item .forget:hover { color: var(--danger); }
+.memory-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+.memory-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.memory-add input {
+  flex: 1;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.memory-add input:focus { border-color: var(--accent); }
+.memory-add button {
+  background: var(--accent);
+  border: none;
+  color: white;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.memory-add button:hover { filter: brightness(1.1); }
+.memory-actions { margin-top: 6px; text-align: right; }
+.memory-actions button {
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+}
+.memory-actions button.danger:hover { background: var(--danger); color: white; border-color: var(--danger); }
+.memory-actions button:hover { background: var(--bg-glass-hover); }
+
 /* ── Math (KaTeX) ────────────────────────────────────────────────── */
 .msg .katex { font-size: 1.05em; }
 .msg .katex-display {

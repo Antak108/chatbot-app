@@ -42,6 +42,10 @@ const attachBtn = document.getElementById('attachBtn');
 const fileInput = document.getElementById('fileInput');
 const attachmentsEl = document.getElementById('attachments');
 const dropOverlay = document.getElementById('dropOverlay');
+const memoryListEl = document.getElementById('memoryList');
+const memoryInputEl = document.getElementById('memoryInput');
+const memoryAddBtn = document.getElementById('memoryAddBtn');
+const memoryClearBtn = document.getElementById('memoryClearBtn');
 
 const STORAGE_KEY = 'chatbot.lastSessionId';
 const SETTINGS_KEY = 'chatbot.settings';
@@ -185,6 +189,76 @@ if (themeSelect) themeSelect.addEventListener('change', () => { applyTheme(theme
 if (accentPicker) accentPicker.addEventListener('input', () => { applyAccent(accentPicker.value); saveSettings(); });
 if (densitySelect) densitySelect.addEventListener('change', () => { applyDensity(densitySelect.value); saveSettings(); });
 if (fontSizeSelect) fontSizeSelect.addEventListener('change', () => { applyFontSize(fontSizeSelect.value); saveSettings(); });
+
+// ── Long-term memory (cross-session) ───────────────────────────────
+async function loadMemory() {
+  try {
+    const r = await fetch('/api/memory');
+    if (!r.ok) return { facts: [] };
+    return await r.json();
+  } catch (_) { return { facts: [] }; }
+}
+
+async function renderMemory() {
+  const data = await loadMemory();
+  memoryListEl.innerHTML = '';
+  if (!data.facts.length) {
+    const empty = document.createElement('div');
+    empty.className = 'memory-empty';
+    empty.textContent = 'No memories yet. Type /remember your fact.';
+    memoryListEl.appendChild(empty);
+    return;
+  }
+  data.facts.forEach((f, idx) => {
+    const row = document.createElement('div');
+    row.className = 'memory-item';
+    const text = document.createElement('span');
+    text.className = 'text';
+    text.textContent = f.text;
+    const forget = document.createElement('button');
+    forget.type = 'button';
+    forget.className = 'forget';
+    forget.textContent = '\u00D7';
+    forget.title = 'Forget this';
+    forget.addEventListener('click', async () => {
+      try {
+        await fetch('/api/memory/' + idx, { method: 'DELETE' });
+        renderMemory();
+      } catch (err) { console.error('Forget failed:', err); }
+    });
+    row.appendChild(text);
+    row.appendChild(forget);
+    memoryListEl.appendChild(row);
+  });
+}
+
+if (memoryAddBtn) {
+  memoryAddBtn.addEventListener('click', async () => {
+    const t = memoryInputEl.value.trim();
+    if (!t) return;
+    try {
+      await fetch('/api/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: t }),
+      });
+      memoryInputEl.value = '';
+      renderMemory();
+    } catch (err) { console.error('Add memory failed:', err); }
+  });
+}
+if (memoryInputEl) {
+  memoryInputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); memoryAddBtn.click(); }
+  });
+}
+if (memoryClearBtn) {
+  memoryClearBtn.addEventListener('click', async () => {
+    if (!confirm('Clear all long-term memories?')) return;
+    try { await fetch('/api/memory/clear', { method: 'POST' }); renderMemory(); }
+    catch (err) { console.error('Clear failed:', err); }
+  });
+}
 
 // ── File attachments (upload, drag-drop, paste) ────────────────────
 async function handleFile(file) {
@@ -1092,7 +1166,7 @@ async function sendMessage() {
       userInput.value = '';
       autoResize(userInput);
       updateCharCounter();
-      try { await cmd.run(); } catch (err) { console.error('Command failed:', err); }
+      try { await cmd.run(text); } catch (err) { console.error('Command failed:', err); }
       return;
     }
   }
@@ -1564,6 +1638,39 @@ const COMMANDS = [
       modelSelect.selectedIndex = (modelSelect.selectedIndex + 1) % modelSelect.options.length;
       saveSettings();
     } },
+  { cmd: '/memory', name: 'Show all long-term memories', run: async () => {
+      const data = await loadMemory();
+      if (!data.facts.length) { sendCommandMessage('No memories yet.'); return; }
+      const list = data.facts.map((f, i) => (i + 1) + '. ' + f.text).join('\n');
+      sendCommandMessage('Long-term memory:\n' + list);
+    } },
+  { cmd: '/remember', name: 'Add a fact to long-term memory (e.g. /remember I prefer dark mode)', run: async (text) => {
+      const fact = text.replace(/^\/remember\s+/i, '').trim();
+      if (!fact) { sendCommandMessage('Usage: /remember <fact>'); return; }
+      const r = await fetch('/api/memory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: fact }) });
+      const d = await r.json();
+      if (d.error) { sendCommandMessage('Error: ' + d.error); return; }
+      if (d.duplicate) { sendCommandMessage('Already remembered: ' + fact); return; }
+      sendCommandMessage('\u2713 Remembered: ' + fact);
+      renderMemory();
+    } },
+  { cmd: '/forget', name: 'Forget a fact (e.g. /forget 1) or clear all', run: async (text) => {
+      const arg = text.replace(/^\/forget\s+/i, '').trim();
+      if (!arg) { sendCommandMessage('Usage: /forget <index> or /forget all'); return; }
+      if (arg.toLowerCase() === 'all') {
+        if (!confirm('Clear all memories?')) return;
+        await fetch('/api/memory/clear', { method: 'POST' });
+        sendCommandMessage('All memories cleared.');
+        renderMemory();
+        return;
+      }
+      const idx = parseInt(arg, 10) - 1;
+      if (Number.isNaN(idx)) { sendCommandMessage('Invalid index.'); return; }
+      const r = await fetch('/api/memory/' + idx, { method: 'DELETE' });
+      if (!r.ok) { sendCommandMessage('Failed to forget.'); return; }
+      sendCommandMessage('Forgotten #' + (idx + 1));
+      renderMemory();
+    } },
 ];
 
 async function sendCommandMessage(text) {
@@ -1697,5 +1804,6 @@ slashMenu.addEventListener('mousedown', (e) => e.preventDefault());
   if (lastId && sessions.find(s => s.id === lastId)) {
     await switchSession(lastId);
   }
+  await renderMemory();
   updateCharCounter();
 })();

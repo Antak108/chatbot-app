@@ -9,6 +9,7 @@ const pdfParse = require('pdf-parse');
 const { version } = require('./package.json');
 const guardrails = require('./guardrails');
 const db = require('./db');
+const memory = require('./memory');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -166,7 +167,7 @@ app.post('/api/chat', rateLimit, async (req, res) => {
     (typeof system_prompt === 'string' && system_prompt.trim()) ||
     (session && session.system_prompt) ||
     'You are a helpful assistant.';
-  const hardenedSystemPrompt = baseSystemPrompt + SAFETY_RULES_SUFFIX;
+  const hardenedSystemPrompt = baseSystemPrompt + memory.asPromptSection() + SAFETY_RULES_SUFFIX;
 
   if (regenerate === true && session) {
     try { db.popLastMessage(session_id); } catch (_) { /* ignore */ }
@@ -493,7 +494,7 @@ app.post('/api/chat/continue', rateLimit, async (req, res) => {
     (typeof system_prompt === 'string' && system_prompt.trim()) ||
     session.system_prompt ||
     'You are a helpful assistant.';
-  const hardenedSystemPrompt = baseSystemPrompt + SAFETY_RULES_SUFFIX;
+  const hardenedSystemPrompt = baseSystemPrompt + memory.asPromptSection() + SAFETY_RULES_SUFFIX;
 
   const llmPayload = {
     model: (typeof model === 'string' && model.trim()) || session.model || 'liquid/lfm2.5-1.2b',
@@ -655,6 +656,30 @@ app.get('/api/models', async (_req, res) => {
     const fallback = [{ id: 'liquid/lfm2.5-1.2b', label: 'liquid/lfm2.5-1.2b (default)', state: 'unknown' }];
     res.json(fallback);
   }
+});
+
+// ─── Memory API (cross-session long-term memory) ────────────────────
+app.get('/api/memory', (_req, res) => {
+  res.json(memory.list());
+});
+
+app.post('/api/memory', (req, res) => {
+  const { text } = req.body || {};
+  const result = memory.add(text);
+  if (result.error) return res.status(400).json(result);
+  res.status(201).json({ ok: true, facts: result.data.facts, duplicate: !!result.duplicate });
+});
+
+app.delete('/api/memory/:index', (req, res) => {
+  const idx = parseInt(req.params.index, 10);
+  if (Number.isNaN(idx)) return res.status(400).json({ error: 'Invalid index' });
+  const result = memory.remove(idx);
+  if (result.error) return res.status(400).json(result);
+  res.json({ ok: true, facts: result.data.facts });
+});
+
+app.post('/api/memory/clear', (_req, res) => {
+  res.json(memory.clear());
 });
 
 // ─── Health check ────────────────────────────────────────────────────
