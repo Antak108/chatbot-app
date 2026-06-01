@@ -272,6 +272,34 @@ if (memoryClearBtn) {
   });
 }
 
+// ── Custom blocklist (admin) ────────────────────────────────────────
+const blocklistArea = document.getElementById('blocklistArea');
+const blocklistSaveBtn = document.getElementById('blocklistSaveBtn');
+async function loadBlocklist() {
+  if (!blocklistArea) return;
+  try {
+    const r = await fetch('/api/blocklist');
+    if (!r.ok) return;
+    const d = await r.json();
+    blocklistArea.value = (d.entries || []).join('\n');
+  } catch (_) {}
+}
+if (blocklistSaveBtn) {
+  blocklistSaveBtn.addEventListener('click', async () => {
+    const entries = blocklistArea.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    try {
+      const r = await fetch('/api/blocklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      blocklistSaveBtn.textContent = 'Saved \u2713';
+      setTimeout(() => { blocklistSaveBtn.textContent = 'Save blocklist'; }, 1500);
+    } catch (err) { window.alert('Save failed: ' + err.message); }
+  });
+}
+
 // ── Templates (system-prompt presets, with persistence) ───────────
 const templateSelect = document.getElementById('templateSelect');
 const templateNote = document.getElementById('templateNote');
@@ -2401,6 +2429,7 @@ slashMenu.addEventListener('mousedown', (e) => e.preventDefault());
     await switchSession(lastId);
   }
   await renderMemory();
+  await loadBlocklist();
   // Register service worker (PWA shell caching) if available
   if ('serviceWorker' in navigator) {
     try { await navigator.serviceWorker.register('/sw.js'); }

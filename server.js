@@ -12,6 +12,10 @@ const guardrails = require('./guardrails');
 const db = require('./db');
 const memory = require('./memory');
 const templates = require('./templates');
+const blocklist = require('./blocklist');
+const redact = require('./redact');
+const audit = require('./audit');
+const auth = require('./auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -46,6 +50,16 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '32kb' })); // Limit body size (32KB to allow generation params)
+
+// Optional bearer-token auth on /api/* (skips /api/health for monitoring)
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  if (req.path === '/api/health') return next();
+  if (!auth.isEnabled()) return next();
+  if (auth.check(req.headers.authorization)) return next();
+  audit.append({ event: 'auth_denied', ip: req.ip, path: req.path });
+  return res.status(401).json({ error: 'Unauthorized' });
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -107,6 +121,16 @@ app.post('/api/chat', rateLimit, async (req, res) => {
       error: `Message too long. Maximum ${MAX_INPUT_LENGTH} characters allowed.`,
     });
   }
+
+  // ── Custom blocklist ────────────────────────────────────────────────
+  const blocked = blocklist.contains(message);
+  if (blocked) {
+    audit.append({ event: 'blocklist_hit', ip: req.ip, match: blocked });
+    return res.status(400).json({ error: 'Message blocked by custom blocklist', match: blocked });
+  }
+
+  // ── PII redaction (input) ───────────────────────────────────────────
+  const redactedMessage = redact.shouldRun() ? redact.redact(message) : message;
 
   // ── Session lookup (optional) ──────────────────────────────────────
   let session = null;
@@ -361,6 +385,8 @@ app.post('/api/chat', rateLimit, async (req, res) => {
   } catch (err) {
     console.error(JSON.stringify({ reqId: req.id, event: 'llm_unreachable', error: err.message }));
     return res.status(503).json({ error: 'Could not reach the LLM service. Is it running?' });
+  } finally {
+    audit.append({ event: 'chat', ip: req.ip, session_id: session_id || null, model: model || null });
   }
 });
 
@@ -817,7 +843,36 @@ app.delete('/api/templates/:id', (req, res) => {
 
 // ─── Health check ────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', llm: LLM_BASE_URL, version });
+  res.json({
+    status: 'ok',
+    llm: LLM_BASE_URL,
+    version,
+    auth: auth.isEnabled(),
+    pii: redact.shouldRun(),
+    blocklist: blocklist.entries.length,
+    audit: audit.enabled(),
+  });
+});
+
+// ─── Admin-ish endpoints: blocklist, audit, redact settings ───────────
+app.get('/api/blocklist', (_req, res) => {
+  res.json({ entries: blocklist.entries, file: blocklist.FILE });
+});
+
+app.post('/api/blocklist', (req, res) => {
+  const list = (req.body && req.body.entries) || [];
+  if (!Array.isArray(list)) return res.status(400).json({ error: 'entries must be an array' });
+  try {
+    fs.writeFileSync(blocklist.FILE, list.map(String).join('\n') + '\n', 'utf-8');
+    blocklist.load();
+    audit.append({ event: 'blocklist_updated', count: list.length });
+    res.json({ ok: true, count: list.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/audit', (req, res) => {
+  const n = Math.min(1000, parseInt(req.query.n, 10) || 100);
+  res.json({ events: audit.recent(n) });
 });
 
 // ─── SPA fallback ────────────────────────────────────────────────────

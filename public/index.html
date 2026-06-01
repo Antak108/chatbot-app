@@ -146,6 +146,14 @@
             <button type="button" id="memoryClearBtn" class="danger">Clear all</button>
           </div>
         </details>
+        <details class="settings-advanced">
+          <summary>Custom blocklist</summary>
+          <p class="settings-note" style="font-size:11px;color:var(--text-muted);margin:4px 0 8px;">One phrase per line. Whole-word, case-insensitive match. Save writes to <code>data/blocklist.json</code>.</p>
+          <textarea id="blocklistArea" rows="4" placeholder="e.g.&#10;confidential&#10;do-not-discuss" style="width:100%;background:var(--bg-secondary);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:4px;padding:6px;font-family:inherit;font-size:12px;outline:none;"></textarea>
+          <div class="memory-actions">
+            <button type="button" id="blocklistSaveBtn">Save blocklist</button>
+          </div>
+        </details>
       </div>
 
       <div class="welcome" id="welcome">
