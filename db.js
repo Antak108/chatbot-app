@@ -180,6 +180,19 @@ function getMessages(id, limit = CONTEXT_LIMIT) {
   return messages.slice(-limit);
 }
 
+function popLastMessage(id) {
+  const session = getSession(id);
+  if (!session.messages || session.messages.length === 0) return null;
+  const removed = session.messages.pop();
+  session.updated_at = Date.now();
+  atomicWriteSync(
+    path.join(DB_DIR, `${id}.json`),
+    JSON.stringify(session, null, 2),
+  );
+  invalidateCache();
+  return removed;
+}
+
 function quarantine(filename) {
   try {
     const src = path.join(DB_DIR, filename);
@@ -207,6 +220,7 @@ module.exports = {
   renameSession,
   addMessage,
   getMessages,
+  popLastMessage,
   CONTEXT_LIMIT,
   DB_DIR,
 };

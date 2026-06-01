@@ -29,7 +29,7 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; " +
-    "style-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com; " +
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; " +
     "font-src https://fonts.gstatic.com; img-src 'self'; " +
     "connect-src 'self'; object-src 'none'; base-uri 'self'; " +
     "frame-ancestors 'none'; form-action 'self'; frame-src 'none'");
@@ -83,7 +83,7 @@ const CANNED_HARMFUL = "I'm not able to help with that request. Please ask me so
 const EMPTY_REPLY = 'I have no response.';
 
 app.post('/api/chat', rateLimit, async (req, res) => {
-  const { message, system_prompt, session_id } = req.body || {};
+  const { message, system_prompt, session_id, regenerate } = req.body || {};
 
   // ── Basic validation ───────────────────────────────────────────────
   if (!message || typeof message !== 'string') {
@@ -146,6 +146,10 @@ app.post('/api/chat', rateLimit, async (req, res) => {
     // Build messages array: system, [history...], user
     const messages = [{ role: 'system', content: hardenedSystemPrompt }];
     if (session) {
+      // Regenerate: drop the last assistant message so the new reply replaces it
+      if (regenerate === true) {
+        try { db.popLastMessage(session_id); } catch (_) { /* ignore */ }
+      }
       const history = db.getMessages(session_id);
       for (const m of history) {
         messages.push({ role: m.role, content: m.content });
@@ -191,7 +195,9 @@ app.post('/api/chat', rateLimit, async (req, res) => {
     // Persist to session if provided
     if (session) {
       try {
-        db.addMessage(session_id, { role: 'user', content: message });
+        if (regenerate !== true) {
+          db.addMessage(session_id, { role: 'user', content: message });
+        }
         db.addMessage(session_id, { role: 'assistant', content: reply });
       } catch (err) {
         console.error(JSON.stringify({ reqId: req.id, event: 'session_persist_failed', error: err.message }));

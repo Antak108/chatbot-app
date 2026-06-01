@@ -6,9 +6,11 @@ const messagesEl = document.getElementById('messages');
 const welcomeEl = document.getElementById('welcome');
 const userInput = document.getElementById('userInput');
 const sendBtn = document.getElementById('sendBtn');
+const charCounter = document.getElementById('charCounter');
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsPanel = document.getElementById('settingsPanel');
 const systemPromptEl = document.getElementById('systemPrompt');
+const presetSelect = document.getElementById('presetSelect');
 const sidebarEl = document.getElementById('sidebar');
 const sessionListEl = document.getElementById('sessionList');
 const newChatBtn = document.getElementById('newChatBtn');
@@ -16,13 +18,54 @@ const sidebarCloseBtn = document.getElementById('sidebarClose');
 const hamburgerBtn = document.getElementById('hamburger');
 const sidebarError = document.getElementById('sidebarError');
 const sidebarRetry = document.getElementById('sidebarRetry');
+const sidebarSearchWrap = document.getElementById('sidebarSearchWrap');
+const sidebarSearch = document.getElementById('sidebarSearch');
+const sidebarSearchBtn = document.getElementById('sidebarSearchBtn');
+const exportBtn = document.getElementById('exportBtn');
+const quickPrompts = document.getElementById('quickPrompts');
 
 const STORAGE_KEY = 'chatbot.lastSessionId';
+const MAX_INPUT_LENGTH = 2000;
+
+// ── System prompt presets ──────────────────────────────────────────
+const PRESETS = [
+  { name: 'Default (helpful assistant)', prompt: 'You are a helpful assistant.' },
+  { name: 'Rhyming poet', prompt: 'You answer only in rhymes.' },
+  { name: 'Concise (one line)', prompt: 'You answer every question in exactly one short sentence.' },
+  { name: 'Pirate captain', prompt: 'You are a pirate captain. Speak in pirate vernacular, use "Arrr" liberally, and reference the seven seas.' },
+  { name: 'Code reviewer', prompt: 'You are a senior software engineer doing code review. Be specific, point out bugs and edge cases, suggest improvements.' },
+  { name: 'ELI5 teacher', prompt: 'You explain concepts as if to a 5-year-old. Use simple words, short sentences, and analogies.' },
+  { name: 'Socratic tutor', prompt: 'You are a Socratic tutor. Never give the answer directly. Instead, ask guiding questions to help the user discover the answer.' },
+  { name: 'JSON-only responder', prompt: 'You always respond with valid JSON. No prose, no markdown fences, no commentary. Just the JSON object.' },
+];
 
 // ── State ────────────────────────────────────────────────────────────
 let currentSessionId = null;
 let isSending = false;
 let sessions = [];
+let sessionFilter = '';
+let lastBotBubble = null;
+let lastUserMessage = null;
+
+// ── Populate preset selector ────────────────────────────────────────
+for (const p of PRESETS) {
+  const opt = document.createElement('option');
+  opt.value = p.prompt;
+  opt.textContent = p.name;
+  presetSelect.appendChild(opt);
+}
+
+presetSelect.addEventListener('change', () => {
+  if (presetSelect.value) {
+    systemPromptEl.value = presetSelect.value;
+  }
+});
+
+systemPromptEl.addEventListener('input', () => {
+  // Mark as custom if user edits
+  const match = PRESETS.find(p => p.prompt === systemPromptEl.value);
+  if (!match) presetSelect.value = '';
+});
 
 // ── Configure marked (code block renderer) ──────────────────────────
 if (typeof marked !== 'undefined') {
@@ -80,6 +123,39 @@ function initHighlight() {
   }
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (sameDay) return time;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + time;
+}
+
+function showMessagesArea() {
+  if (welcomeEl && !welcomeEl.classList.contains('hidden')) {
+    welcomeEl.classList.add('hidden');
+    messagesEl.classList.remove('hidden');
+  }
+  exportBtn.classList.remove('hidden');
+}
+
+function showWelcomeArea() {
+  welcomeEl.classList.remove('hidden');
+  messagesEl.classList.add('hidden');
+  exportBtn.classList.add('hidden');
+}
+
+function updateCharCounter() {
+  const len = userInput.value.length;
+  charCounter.textContent = len + ' / ' + MAX_INPUT_LENGTH;
+  charCounter.classList.toggle('warn', len > MAX_INPUT_LENGTH * 0.8 && len < MAX_INPUT_LENGTH);
+  charCounter.classList.toggle('danger', len >= MAX_INPUT_LENGTH);
+  sendBtn.disabled = isSending || len === 0 || len > MAX_INPUT_LENGTH;
+}
+
 // ── Sidebar (mobile) ────────────────────────────────────────────────
 function openSidebar() { sidebarEl.classList.add('open'); }
 function closeSidebar() { sidebarEl.classList.remove('open'); }
@@ -87,22 +163,40 @@ function closeSidebar() { sidebarEl.classList.remove('open'); }
 hamburgerBtn.addEventListener('click', openSidebar);
 sidebarCloseBtn.addEventListener('click', closeSidebar);
 sidebarEl.addEventListener('click', (e) => {
-  // Close drawer when tapping outside the inner content
   if (e.target === sidebarEl) closeSidebar();
 });
 
 // ── Settings toggle ──────────────────────────────────────────────────
 settingsBtn.addEventListener('click', () => settingsPanel.classList.toggle('open'));
 
-// ── Auto-resize textareas ─────────────────────────────────────────────
+// ── Sidebar search toggle ───────────────────────────────────────────
+sidebarSearchBtn.addEventListener('click', () => {
+  sidebarSearchWrap.classList.toggle('hidden');
+  if (!sidebarSearchWrap.classList.contains('hidden')) {
+    sidebarSearch.focus();
+  } else {
+    sidebarSearch.value = '';
+    sessionFilter = '';
+    renderSessionList();
+  }
+});
+sidebarSearch.addEventListener('input', () => {
+  sessionFilter = sidebarSearch.value.toLowerCase().trim();
+  renderSessionList();
+});
+
+// ── Auto-resize textareas ────────────────────────────────────────────
 function autoResize(el) {
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 120) + 'px';
 }
-userInput.addEventListener('input', () => autoResize(userInput));
+userInput.addEventListener('input', () => {
+  autoResize(userInput);
+  updateCharCounter();
+});
 systemPromptEl.addEventListener('input', () => autoResize(systemPromptEl));
 
-// ── Sessions: list, switch, create, delete ───────────────────────────
+// ── Sessions: list, switch, create, delete, rename ─────────────────
 async function loadSessions() {
   try {
     const res = await fetch('/api/sessions');
@@ -119,14 +213,17 @@ async function loadSessions() {
 
 function renderSessionList() {
   sessionListEl.innerHTML = '';
-  if (sessions.length === 0) {
+  const filtered = sessionFilter
+    ? sessions.filter(s => (s.title || '').toLowerCase().includes(sessionFilter))
+    : sessions;
+  if (filtered.length === 0) {
     const li = document.createElement('li');
     li.className = 'empty-list';
-    li.textContent = 'No conversations yet.';
+    li.textContent = sessionFilter ? 'No matches.' : 'No conversations yet.';
     sessionListEl.appendChild(li);
     return;
   }
-  for (const s of sessions) {
+  for (const s of filtered) {
     const li = document.createElement('li');
     li.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
     li.dataset.id = s.id;
@@ -136,7 +233,12 @@ function renderSessionList() {
     titleBtn.type = 'button';
     titleBtn.className = 'session-title';
     titleBtn.textContent = s.title || 'Untitled';
+    titleBtn.title = 'Click to open, double-click to rename';
     titleBtn.addEventListener('click', () => switchSession(s.id));
+    titleBtn.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      beginRename(li, titleBtn, s.id);
+    });
 
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
@@ -149,6 +251,40 @@ function renderSessionList() {
     li.appendChild(delBtn);
     sessionListEl.appendChild(li);
   }
+}
+
+function beginRename(li, titleBtn, id) {
+  const current = titleBtn.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = current;
+  input.className = 'session-title-input';
+  input.maxLength = 100;
+  li.replaceChild(input, titleBtn);
+  input.focus();
+  input.select();
+
+  const finish = async (save) => {
+    const newTitle = save ? input.value.trim() : current;
+    li.replaceChild(titleBtn, input);
+    if (save && newTitle && newTitle !== current) {
+      try {
+        await fetch('/api/sessions/' + encodeURIComponent(id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+        await loadSessions();
+      } catch (err) {
+        console.error('Rename failed:', err);
+      }
+    }
+  };
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); input.blur(); }
+  });
 }
 
 async function createNewSession() {
@@ -174,12 +310,12 @@ async function switchSession(id) {
   try {
     const res = await fetch('/api/sessions/' + encodeURIComponent(id));
     if (res.status === 404) {
-      // Session no longer exists (deleted in another tab, or after crash recovery)
       currentSessionId = null;
       localStorage.removeItem(STORAGE_KEY);
       messagesEl.innerHTML = '';
-      messagesEl.style.display = 'none';
-      welcomeEl.classList.remove('hidden');
+      lastBotBubble = null;
+      lastUserMessage = null;
+      showWelcomeArea();
       return;
     }
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -188,14 +324,20 @@ async function switchSession(id) {
     localStorage.setItem(STORAGE_KEY, id);
 
     messagesEl.innerHTML = '';
+    lastBotBubble = null;
+    lastUserMessage = null;
+
     if (!Array.isArray(session.messages) || session.messages.length === 0) {
-      welcomeEl.classList.remove('hidden');
-      messagesEl.style.display = 'none';
+      showWelcomeArea();
     } else {
+      // Hide welcome via showMessagesArea
       welcomeEl.classList.add('hidden');
-      messagesEl.style.display = 'flex';
-      for (const m of session.messages) {
-        addBubble(m.content, m.role);
+      messagesEl.classList.remove('hidden');
+      exportBtn.classList.remove('hidden');
+      for (let i = 0; i < session.messages.length; i++) {
+        const m = session.messages[i];
+        const isLast = i === session.messages.length - 1;
+        addBubble(m.content, m.role, m.created_at, isLast);
       }
     }
     renderSessionList();
@@ -213,8 +355,9 @@ async function deleteSession(id) {
       currentSessionId = null;
       localStorage.removeItem(STORAGE_KEY);
       messagesEl.innerHTML = '';
-      messagesEl.style.display = 'none';
-      welcomeEl.classList.remove('hidden');
+      lastBotBubble = null;
+      lastUserMessage = null;
+      showWelcomeArea();
     }
     await loadSessions();
   } catch (err) {
@@ -225,11 +368,38 @@ async function deleteSession(id) {
 newChatBtn.addEventListener('click', createNewSession);
 sidebarRetry.addEventListener('click', loadSessions);
 
-// ── Keyboard ─────────────────────────────────────────────────────────
+// ── Quick-start chips ──────────────────────────────────────────────
+if (quickPrompts) {
+  quickPrompts.addEventListener('click', (e) => {
+    const btn = e.target.closest('.chip');
+    if (!btn) return;
+    const prompt = btn.dataset.prompt;
+    if (prompt) {
+      userInput.value = prompt;
+      autoResize(userInput);
+      updateCharCounter();
+      userInput.focus();
+    }
+  });
+}
+
+// ── Keyboard ────────────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeSidebar();
     settingsPanel.classList.remove('open');
+    if (!sidebarSearchWrap.classList.contains('hidden')) {
+      sidebarSearchWrap.classList.add('hidden');
+      sidebarSearch.value = '';
+      sessionFilter = '';
+      renderSessionList();
+    }
+  }
+  // Ctrl/Cmd+K: focus search
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault();
+    sidebarSearchWrap.classList.remove('hidden');
+    sidebarSearch.focus();
   }
 });
 
@@ -242,13 +412,8 @@ userInput.addEventListener('keydown', (e) => {
 
 sendBtn.addEventListener('click', sendMessage);
 
-// ── Copy button (event delegation so CSP does not block inline JS) ──
-document.addEventListener('click', (e) => {
-  const btn = e.target && e.target.closest && e.target.closest('.copy-btn');
-  if (!btn) return;
-  const code = btn.parentElement && btn.parentElement.querySelector('code');
-  if (!code) return;
-  const text = code.textContent;
+// ── Copy buttons (code blocks + whole messages) ────────────────────
+async function copyText(text) {
   const fallback = () => {
     const ta = document.createElement('textarea');
     ta.value = text;
@@ -259,31 +424,101 @@ document.addEventListener('click', (e) => {
     try { document.execCommand('copy'); } catch (_) { /* ignore */ }
     document.body.removeChild(ta);
   };
-  const p = (navigator.clipboard && navigator.clipboard.writeText(text)) || Promise.reject();
-  p.catch(fallback).then(() => {
-    const original = btn.textContent;
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = original; }, 2000);
-  });
-});
-
-// ── Bubble rendering ─────────────────────────────────────────────────
-function showMessagesArea() {
-  if (welcomeEl && !welcomeEl.classList.contains('hidden')) {
-    welcomeEl.classList.add('hidden');
-    messagesEl.style.display = 'flex';
+  try {
+    await (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject());
+  } catch (_) {
+    fallback();
   }
 }
 
-function addBubble(text, role) {
+document.addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest && e.target.closest('button');
+  if (!btn) return;
+
+  // Code block copy
+  if (btn.classList.contains('copy-btn') && btn.closest('.code-block')) {
+    const code = btn.parentElement && btn.parentElement.querySelector('code');
+    if (!code) return;
+    const text = code.textContent;
+    copyText(text);
+    const original = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = original; }, 2000);
+    return;
+  }
+
+  // Message copy
+  if (btn.classList.contains('msg-copy')) {
+    const bubble = btn.closest('.msg');
+    if (!bubble) return;
+    // Strip code blocks' copy buttons and time/actions before copying
+    const clone = bubble.cloneNode(true);
+    clone.querySelectorAll('.msg-time, .msg-actions, .code-block .copy-btn').forEach(n => n.remove());
+    const text = (clone.innerText || clone.textContent || '').trim();
+    copyText(text);
+    const original = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = original; }, 2000);
+    return;
+  }
+
+  // Regenerate
+  if (btn.classList.contains('msg-regenerate')) {
+    regenerateLastResponse();
+    return;
+  }
+});
+
+// ── Bubble rendering ────────────────────────────────────────────────
+function addBubble(text, role, ts, isLast) {
   showMessagesArea();
   const div = document.createElement('div');
   div.className = 'msg ' + role;
+
+  const content = document.createElement('div');
+  content.className = 'msg-content';
   if (role === 'bot') {
-    div.innerHTML = renderMarkdown(text);
+    content.innerHTML = renderMarkdown(text);
   } else {
-    div.textContent = text;
+    content.textContent = text;
   }
+  div.appendChild(content);
+
+  if (ts) {
+    const time = document.createElement('span');
+    time.className = 'msg-time';
+    time.textContent = formatTime(ts);
+    div.appendChild(time);
+  }
+
+  if (role === 'bot' && isLast && currentSessionId) {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'msg-copy';
+    copyBtn.textContent = 'Copy';
+    actions.appendChild(copyBtn);
+
+    const regenBtn = document.createElement('button');
+    regenBtn.type = 'button';
+    regenBtn.className = 'msg-regenerate';
+    regenBtn.textContent = 'Regenerate';
+    actions.appendChild(regenBtn);
+    div.appendChild(actions);
+
+    lastBotBubble = div;
+  } else if (role === 'bot') {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'msg-copy';
+    copyBtn.textContent = 'Copy';
+    actions.appendChild(copyBtn);
+    div.appendChild(actions);
+  }
+
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   initHighlight();
@@ -307,9 +542,11 @@ async function sendMessage() {
   isSending = true;
   sendBtn.disabled = true;
 
-  addBubble(text, 'user');
+  addBubble(text, 'user', Date.now(), true);
+  lastUserMessage = text;
   userInput.value = '';
   autoResize(userInput);
+  updateCharCounter();
 
   const typingEl = addTypingIndicator();
 
@@ -341,11 +578,8 @@ async function sendMessage() {
       if (!data || typeof data.reply !== 'string') {
         addBubble('⚠️ Invalid response from server', 'error');
       } else {
-        addBubble(data.reply, 'bot');
-        if (currentSessionId) {
-          // Refresh sidebar to reflect new title and updated_at
-          await loadSessions();
-        }
+        addBubble(data.reply, 'bot', Date.now(), true);
+        if (currentSessionId) await loadSessions();
       }
     }
   } catch (err) {
@@ -353,16 +587,114 @@ async function sendMessage() {
     addBubble('⚠️ Network error — is the server running?', 'error');
   } finally {
     isSending = false;
-    sendBtn.disabled = false;
+    updateCharCounter();
     userInput.focus();
   }
 }
 
-// ── Init ─────────────────────────────────────────────────────────────
+async function regenerateLastResponse() {
+  if (isSending || !currentSessionId || !lastUserMessage) return;
+
+  isSending = true;
+  sendBtn.disabled = true;
+
+  // Remove the last bot bubble (and its actions)
+  if (lastBotBubble) {
+    lastBotBubble.remove();
+    lastBotBubble = null;
+  }
+
+  const typingEl = addTypingIndicator();
+
+  try {
+    const body = {
+      message: lastUserMessage,
+      system_prompt: systemPromptEl.value.trim() || 'You are a helpful assistant.',
+      session_id: currentSessionId,
+      regenerate: true,
+    };
+
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    typingEl.remove();
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+      addBubble('⚠️ ' + (err.error || 'Something went wrong.'), 'error');
+    } else {
+      const data = await res.json();
+      if (data && typeof data.reply === 'string') {
+        addBubble(data.reply, 'bot', Date.now(), true);
+        await loadSessions();
+      } else {
+        addBubble('⚠️ Invalid response from server', 'error');
+      }
+    }
+  } catch (err) {
+    typingEl.remove();
+    addBubble('⚠️ Network error — is the server running?', 'error');
+  } finally {
+    isSending = false;
+    updateCharCounter();
+    userInput.focus();
+  }
+}
+
+// ── Export conversation as Markdown ────────────────────────────────
+function exportConversation() {
+  if (!currentSessionId) return;
+  fetch('/api/sessions/' + encodeURIComponent(currentSessionId))
+    .then(r => r.json())
+    .then(session => {
+      const lines = [];
+      lines.push('# ' + (session.title || 'Chat export'));
+      lines.push('');
+      lines.push('*Exported ' + new Date().toISOString() + '*');
+      lines.push('');
+      lines.push('**System prompt:**');
+      lines.push('');
+      lines.push('> ' + (session.system_prompt || '').replace(/\n/g, '\n> '));
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+      for (const m of (session.messages || [])) {
+        const role = m.role === 'user' ? '**You**' : '**Assistant**';
+        const time = m.created_at ? ' *(' + formatTime(m.created_at) + ')*' : '';
+        lines.push(role + time + ':');
+        lines.push('');
+        lines.push(m.content);
+        if (m.blocked) {
+          lines.push('');
+          lines.push('> ⚠️ Blocked by guardrail: ' + (m.reason || 'unknown'));
+        }
+        lines.push('');
+      }
+      const md = lines.join('\n');
+      const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (session.title || 'chat').replace(/[^a-zA-Z0-9-_]+/g, '-').slice(0, 60) + '.md';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    })
+    .catch(err => console.error('Export failed:', err));
+}
+
+if (exportBtn) exportBtn.addEventListener('click', exportConversation);
+
+// ── Init ────────────────────────────────────────────────────────────
 (async function init() {
   await loadSessions();
   const lastId = localStorage.getItem(STORAGE_KEY);
   if (lastId && sessions.find(s => s.id === lastId)) {
     await switchSession(lastId);
   }
+  updateCharCounter();
 })();
