@@ -33,7 +33,8 @@ app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; " +
     "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; " +
-    "font-src https://fonts.gstatic.com; img-src 'self'; " +
+    "font-src https://fonts.gstatic.com https://cdn.jsdelivr.net data:; " +
+    "img-src 'self' data: https://cdn.jsdelivr.net; " +
     "connect-src 'self'; object-src 'none'; base-uri 'self'; " +
     "frame-ancestors 'none'; form-action 'self'; frame-src 'none'");
   next();

@@ -983,7 +983,35 @@ body {
 .msg-react:hover { opacity: 1; background: var(--bg-glass); }
 .msg-react.active { opacity: 1; background: var(--accent-surface); border-color: var(--accent); }
 
-/* ── Inline edit textarea ────────────────────────────────────────── */
+/* ── Math (KaTeX) ────────────────────────────────────────────────── */
+.msg .katex { font-size: 1.05em; }
+.msg .katex-display {
+  margin: 0.6em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+
+/* ── Mermaid diagrams ────────────────────────────────────────────── */
+.mermaid {
+  display: block;
+  text-align: center;
+  margin: 0.6em 0;
+  padding: 12px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+.mermaid svg { max-width: 100%; height: auto; }
+.mermaid-error {
+  color: var(--danger);
+  font-size: 12px;
+  white-space: pre-wrap;
+  text-align: left;
+  margin: 0;
+  font-family: ui-monospace, monospace;
+}
 .msg-edit-input {
   width: 100%;
   background: var(--bg-secondary);

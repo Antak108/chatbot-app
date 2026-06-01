@@ -199,9 +199,28 @@ async function loadModels() {
   }
 }
 
-// ── Configure marked (code block renderer) ──────────────────────────
+// ── Configure marked (code block renderer + extensions) ────────────
 if (typeof marked !== 'undefined') {
+  // Mermaid fence: ```mermaid → <div class="mermaid">
+  const mermaidExtension = {
+    name: 'mermaid',
+    level: 'block',
+    start(src) { return src.match(/^```mermaid\s*/)?.index; },
+    tokenizer(src) {
+      const match = /^```mermaid\s*\n([\s\S]+?)\n```\s*/.exec(src);
+      if (match) {
+        return { type: 'mermaid', raw: match[0], text: match[1] };
+      }
+      return undefined;
+    },
+    renderer(token) {
+      const safe = (token.text || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+      return '<div class="mermaid">' + safe + '</div>';
+    },
+  };
+
   marked.use({
+    extensions: [mermaidExtension],
     renderer: {
       code(token) {
         const safeText = (token && token.text ? token.text : '')
@@ -225,8 +244,12 @@ const ALLOWED_TAGS = [
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li',
   'a', 'blockquote', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
   'img', 'details', 'summary',
+  // Math (KaTeX injects these)
+  'math', 'semantics', 'mrow', 'mi', 'mn', 'mo', 'mfrac', 'msup', 'msub', 'msubsup',
+  'mtext', 'mover', 'munder', 'munderover', 'mspace', 'annotation', 'svg', 'path',
+  'g', 'rect', 'line',
 ];
-const ALLOWED_ATTR = ['class', 'id', 'href', 'title', 'alt', 'src', 'open'];
+const ALLOWED_ATTR = ['class', 'id', 'href', 'title', 'alt', 'src', 'open', 'style', 'aria-hidden', 'role', 'xmlns', 'viewbox', 'd', 'fill', 'stroke'];
 
 function escapeHtml(s) {
   return String(s || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
@@ -252,6 +275,56 @@ function renderMarkdown(text) {
 function initHighlight() {
   if (typeof hljs !== 'undefined') {
     try { hljs.highlightAll(); } catch (_) { /* ignore */ }
+  }
+}
+
+// ── Post-render: math + mermaid (called after each render) ──────────
+let mermaidInitialized = false;
+let mermaidIdCounter = 0;
+async function postRender(root) {
+  if (!root) return;
+  // KaTeX: render $...$ and $$...$$ math
+  if (typeof renderMathInElement === 'function' && typeof katex !== 'undefined') {
+    try {
+      renderMathInElement(root, {
+        delimiters: [
+          { left: '$$', right: '$$', display: true },
+          { left: '$', right: '$', display: false },
+          { left: '\\[', right: '\\]', display: true },
+          { left: '\\(', right: '\\)', display: false },
+        ],
+        throwOnError: false,
+      });
+    } catch (err) { /* ignore */ }
+  }
+  // Mermaid: find .mermaid divs and render them
+  if (typeof mermaid !== 'undefined') {
+    try {
+      if (!mermaidInitialized) {
+        const dark = !(document.documentElement.getAttribute('data-theme') === 'light');
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: dark ? 'dark' : 'default',
+          securityLevel: 'strict',
+          fontFamily: 'inherit',
+        });
+        mermaidInitialized = true;
+      }
+      const blocks = root.querySelectorAll('.mermaid');
+      for (const block of blocks) {
+        if (block.dataset.rendered === '1') continue;
+        const id = 'mmd-' + (++mermaidIdCounter);
+        const source = block.textContent;
+        try {
+          const { svg } = await mermaid.render(id, source);
+          block.innerHTML = svg;
+          block.dataset.rendered = '1';
+        } catch (err) {
+          block.innerHTML = '<pre class="mermaid-error">Mermaid error: ' + (err.message || err) + '\n\n' + source.replace(/</g, '&lt;') + '</pre>';
+          block.dataset.rendered = '1';
+        }
+      }
+    } catch (_) { /* ignore */ }
   }
 }
 
@@ -760,6 +833,8 @@ function addBubble(text, role, ts, isLast, tokens, model, msgObj) {
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   initHighlight();
+  const content2 = div.querySelector('.msg-content');
+  if (content2) postRender(content2);
   return div;
 }
 
@@ -800,6 +875,7 @@ function appendTokenToBot(bubble, token) {
   bubble._streamBuf = next;
   content.innerHTML = renderMarkdown(next);
   initHighlight();
+  // Skip postRender during streaming (will run on finalizeBot) for perf
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
@@ -809,6 +885,7 @@ function finalizeBot(bubble, fullText) {
   const content = bubble.querySelector('.msg-content');
   if (content) content.innerHTML = renderMarkdown(fullText || (bubble._streamBuf || ''));
   initHighlight();
+  if (content) postRender(content);
   delete bubble._streamBuf;
 }
 
@@ -1086,6 +1163,7 @@ async function continueLastResponse(btn) {
           target._streamBuf = buf;
           content.innerHTML = renderMarkdown(buf);
           initHighlight();
+          // Skip postRender during streaming
           messagesEl.scrollTop = messagesEl.scrollHeight;
         }
       }
