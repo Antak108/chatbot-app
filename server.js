@@ -16,6 +16,7 @@ const blocklist = require('./blocklist');
 const redact = require('./redact');
 const audit = require('./audit');
 const auth = require('./auth');
+const metrics = require('./metrics');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -61,6 +62,10 @@ app.use((req, res, next) => {
   return res.status(401).json({ error: 'Unauthorized' });
 });
 app.use(express.static(path.join(__dirname, 'public')));
+// OpenAPI spec served as a static file
+app.get('/openapi.json', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'openapi.json'));
+});
 
 // ═══════════════════════════════════════════════════════════════════════
 // RATE LIMITING
@@ -326,7 +331,7 @@ app.post('/api/chat', rateLimit, async (req, res) => {
         if (regenerate !== true) {
           db.addMessage(session_id, { role: 'user', content: message });
         }
-        const tokens = Math.ceil((message.length + reply.length) / 4);
+        const tokens = completionTokens || Math.ceil((message.length + reply.length) / 4);
         db.addMessage(session_id, { role: 'assistant', content: reply, tokens });
       } catch (err) {
         console.error(JSON.stringify({ reqId: req.id, event: 'session_persist_failed', error: err.message }));
@@ -353,6 +358,13 @@ app.post('/api/chat', rateLimit, async (req, res) => {
 
     const data = await llmResponse.json();
 
+    // Extract usage (OpenAI shape: { usage: { prompt_tokens, completion_tokens, total_tokens } })
+    const usage = data.usage || {};
+    const promptTokens = usage.prompt_tokens || 0;
+    const completionTokens = usage.completion_tokens || 0;
+    if (promptTokens) metrics.inc('llm_prompt_tokens_total', promptTokens);
+    if (completionTokens) metrics.inc('llm_completion_tokens_total', completionTokens);
+
     // Extract the reply (supports LM Studio and OpenAI-compatible shapes)
     let reply =
       (Array.isArray(data.output) && data.output[0] && (data.output[0].content || data.output[0].text)) ||
@@ -374,7 +386,7 @@ app.post('/api/chat', rateLimit, async (req, res) => {
         if (regenerate !== true) {
           db.addMessage(session_id, { role: 'user', content: message });
         }
-        const tokens = Math.ceil((message.length + reply.length) / 4);
+        const tokens = completionTokens || Math.ceil((message.length + reply.length) / 4);
         db.addMessage(session_id, { role: 'assistant', content: reply, tokens });
       } catch (err) {
         console.error(JSON.stringify({ reqId: req.id, event: 'session_persist_failed', error: err.message }));
@@ -873,6 +885,36 @@ app.post('/api/blocklist', (req, res) => {
 app.get('/api/audit', (req, res) => {
   const n = Math.min(1000, parseInt(req.query.n, 10) || 100);
   res.json({ events: audit.recent(n) });
+});
+
+// ─── Metrics + Prometheus ────────────────────────────────────────────
+app.get('/api/metrics', (_req, res) => {
+  res.json(metrics.summary());
+});
+
+app.get('/metrics', (_req, res) => {
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+  res.send(metrics.prometheusText());
+});
+
+app.get('/api/usage', (_req, res) => {
+  // Aggregate per-session token totals
+  const totals = { tokens: 0, messages: 0, sessions: 0 };
+  const bySession = [];
+  for (const s of db.listSessions()) {
+    let session;
+    try { session = db.getSession(s.id); } catch (_) { continue; }
+    let t = 0;
+    for (const m of session.messages) {
+      if (m.tokens) t += m.tokens;
+      totals.messages++;
+    }
+    totals.tokens += t;
+    totals.sessions++;
+    bySession.push({ id: s.id, title: s.title, tokens: t, message_count: session.messages.length });
+  }
+  bySession.sort((a, b) => b.tokens - a.tokens);
+  res.json({ totals, bySession: bySession.slice(0, 25) });
 });
 
 // ─── SPA fallback ────────────────────────────────────────────────────

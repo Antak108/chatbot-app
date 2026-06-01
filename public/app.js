@@ -300,6 +300,41 @@ if (blocklistSaveBtn) {
   });
 }
 
+// ── Usage & metrics (settings panel) ────────────────────────────────
+const usageSummary = document.getElementById('usageSummary');
+const usageBySession = document.getElementById('usageBySession');
+async function loadUsage() {
+  if (!usageSummary) return;
+  try {
+    const r = await fetch('/api/usage');
+    if (!r.ok) return;
+    const d = await r.json();
+    usageSummary.textContent = d.totals.sessions + ' sessions \u00B7 ' + d.totals.messages + ' messages \u00B7 ~' + d.totals.tokens + ' tokens';
+    usageBySession.innerHTML = '';
+    if (!d.bySession.length) {
+      const empty = document.createElement('div');
+      empty.className = 'memory-empty';
+      empty.textContent = 'No usage yet.';
+      usageBySession.appendChild(empty);
+      return;
+    }
+    for (const s of d.bySession) {
+      const row = document.createElement('div');
+      row.className = 'memory-item';
+      const text = document.createElement('span');
+      text.className = 'text';
+      text.textContent = s.title + ' \u00B7 ' + s.message_count + ' msgs';
+      const tok = document.createElement('span');
+      tok.style.color = 'var(--text-muted)';
+      tok.style.fontSize = '11px';
+      tok.textContent = '~' + s.tokens + ' tok';
+      row.appendChild(text);
+      row.appendChild(tok);
+      usageBySession.appendChild(row);
+    }
+  } catch (err) { console.error('Usage load failed:', err); }
+}
+
 // ── Templates (system-prompt presets, with persistence) ───────────
 const templateSelect = document.getElementById('templateSelect');
 const templateNote = document.getElementById('templateNote');
@@ -1567,6 +1602,8 @@ function finalizeBot(bubble, fullText) {
       .trim();
     speak(plain);
   }
+  // Refresh usage metrics after a chat completion
+  loadUsage();
 }
 
 async function sendMessage() {
@@ -2430,6 +2467,7 @@ slashMenu.addEventListener('mousedown', (e) => e.preventDefault());
   }
   await renderMemory();
   await loadBlocklist();
+  await loadUsage();
   // Register service worker (PWA shell caching) if available
   if ('serviceWorker' in navigator) {
     try { await navigator.serviceWorker.register('/sw.js'); }

@@ -1,0 +1,207 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Local LLM Chat API",
+    "version": "1.1.0",
+    "description": "REST API for the Local LLM Chat chatbot app. All endpoints under /api/* can be bearer-auth-gated with API_BEARER_TOKEN (/api/health is always public)."
+  },
+  "servers": [{ "url": "/" }],
+  "components": {
+    "securitySchemes": {
+      "bearer": { "type": "http", "scheme": "bearer" }
+    },
+    "schemas": {
+      "Session": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string" },
+          "system_prompt": { "type": "string" },
+          "model": { "type": "string", "nullable": true },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "pinned": { "type": "boolean" },
+          "archived": { "type": "boolean" },
+          "messages": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "role": { "type": "string", "enum": ["user", "assistant"] },
+          "content": { "type": "string" },
+          "tokens": { "type": "integer" },
+          "model": { "type": "string" },
+          "created_at": { "type": "integer" },
+          "reaction": { "type": "string" },
+          "feedback": { "type": "string" }
+        }
+      }
+    }
+  },
+  "security": [{ "bearer": [] }],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Health check (public)",
+        "security": [],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/sessions": {
+      "get": {
+        "summary": "List sessions",
+        "parameters": [
+          { "name": "archived", "in": "query", "schema": { "type": "string", "enum": ["true", "false"] } }
+        ],
+        "responses": { "200": { "description": "List of session summaries" } }
+      },
+      "post": {
+        "summary": "Create a new session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": { "type": "string" },
+                  "system_prompt": { "type": "string" },
+                  "model": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/api/sessions/{id}": {
+      "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "get": { "summary": "Fetch a session with all messages", "responses": { "200": { "description": "OK" } } },
+      "patch": {
+        "summary": "Update session metadata (title/pinned/tags/order/archived)",
+        "responses": { "200": { "description": "Updated" } }
+      },
+      "delete": { "summary": "Delete a session", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/sessions/import": {
+      "post": {
+        "summary": "Import a session (title + system_prompt + model + messages)",
+        "responses": { "201": { "description": "Imported" } }
+      }
+    },
+    "/api/sessions/{id}/share": {
+      "post": {
+        "summary": "Write a sanitized copy to data/shared and return a shareable URL",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/shared/{id}": {
+      "get": {
+        "summary": "Read a shared session",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/sessions/{id}/messages/{mid}": {
+      "patch": {
+        "summary": "Edit/delete/react a message",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "mid", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": { "summary": "Delete a message", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/chat": {
+      "post": {
+        "summary": "Send a message and (optionally) stream a reply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["message"],
+                "properties": {
+                  "message": { "type": "string" },
+                  "session_id": { "type": "string" },
+                  "system_prompt": { "type": "string" },
+                  "model": { "type": "string" },
+                  "temperature": { "type": "number" },
+                  "top_p": { "type": "number" },
+                  "top_k": { "type": "integer" },
+                  "max_tokens": { "type": "integer" },
+                  "seed": { "type": "integer" },
+                  "stop": { "type": "array", "items": { "type": "string" } },
+                  "regenerate": { "type": "boolean" },
+                  "stream": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/chat/continue": {
+      "post": { "summary": "Continue the last assistant message", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/models": { "get": { "summary": "List available LLM models", "responses": { "200": { "description": "OK" } } } },
+    "/api/search": {
+      "get": {
+        "summary": "Search across messages",
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" } },
+          { "name": "role", "in": "query", "schema": { "type": "string", "enum": ["user", "assistant"] } },
+          { "name": "tag", "in": "query", "schema": { "type": "string" } },
+          { "name": "since", "in": "query", "schema": { "type": "integer" } },
+          { "name": "until", "in": "query", "schema": { "type": "integer" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/memory": {
+      "get": { "summary": "List long-term memory facts", "responses": { "200": { "description": "OK" } } },
+      "post": {
+        "summary": "Add a fact (deduped)",
+        "requestBody": {
+          "content": {
+            "application/json": { "schema": { "type": "object", "properties": { "text": { "type": "string" } } } }
+          }
+        },
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/api/memory/{index}": {
+      "delete": {
+        "summary": "Forget the i-th fact",
+        "parameters": [{ "name": "index", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/memory/clear": { "post": { "summary": "Clear all memory", "responses": { "200": { "description": "OK" } } } },
+    "/api/templates": {
+      "get": { "summary": "List system-prompt templates", "responses": { "200": { "description": "OK" } } },
+      "post": { "summary": "Create a template", "responses": { "201": { "description": "Created" } } }
+    },
+    "/api/templates/{id}": { "delete": { "summary": "Delete a template", "responses": { "200": { "description": "OK" } } } },
+    "/api/upload": { "post": { "summary": "Upload a file (TXT/MD/HTML/CSV/JSON/PDF, max 10MB)", "responses": { "200": { "description": "OK" }, "415": { "description": "Unsupported type" } } } },
+    "/api/blocklist": {
+      "get": { "summary": "List custom blocklist entries", "responses": { "200": { "description": "OK" } } },
+      "post": { "summary": "Replace the blocklist", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/audit": {
+      "get": {
+        "summary": "Get recent audit events",
+        "parameters": [{ "name": "n", "in": "query", "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/metrics": { "get": { "summary": "JSON metrics summary", "responses": { "200": { "description": "OK" } } } },
+    "/metrics": { "get": { "summary": "Prometheus text format", "responses": { "200": { "description": "OK" } } } },
+    "/api/usage": { "get": { "summary": "Aggregate token usage per session", "responses": { "200": { "description": "OK" } } } }
+  }
+}
