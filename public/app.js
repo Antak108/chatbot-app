@@ -735,6 +735,9 @@ sidebarSearch.addEventListener('input', () => {
   renderSessionList();
 });
 
+const showArchived = document.getElementById('showArchived');
+if (showArchived) showArchived.addEventListener('change', () => loadSessions());
+
 // ── Auto-resize textareas ────────────────────────────────────────────
 function autoResize(el) {
   el.style.height = 'auto';
@@ -749,7 +752,10 @@ systemPromptEl.addEventListener('input', () => autoResize(systemPromptEl));
 // ── Sessions: list, switch, create, delete, rename ─────────────────
 async function loadSessions() {
   try {
-    const res = await fetch('/api/sessions');
+    const showArchived = document.getElementById('showArchived');
+    const includeArchived = showArchived && showArchived.checked;
+    const url = includeArchived ? '/api/sessions?archived=true' : '/api/sessions?archived=false';
+    const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     sessions = await res.json();
     sidebarError.classList.add('hidden');
@@ -820,6 +826,25 @@ function renderSessionList() {
     tagBtn.title = 'Edit tags';
     tagBtn.addEventListener('click', (e) => { e.stopPropagation(); beginEditTags(li, s); });
     actions.appendChild(tagBtn);
+
+    const archiveBtn = document.createElement('button');
+    archiveBtn.type = 'button';
+    archiveBtn.className = 'session-action-btn';
+    archiveBtn.textContent = s.archived ? '\u25C7' : '\u25A1';
+    archiveBtn.setAttribute('aria-label', s.archived ? 'Unarchive' : 'Archive');
+    archiveBtn.title = s.archived ? 'Unarchive' : 'Archive';
+    archiveBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        await fetch('/api/sessions/' + encodeURIComponent(s.id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ archived: !s.archived }),
+        });
+        await loadSessions();
+      } catch (err) { console.error('Archive failed:', err); }
+    });
+    actions.appendChild(archiveBtn);
 
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
@@ -2376,6 +2401,11 @@ slashMenu.addEventListener('mousedown', (e) => e.preventDefault());
     await switchSession(lastId);
   }
   await renderMemory();
+  // Register service worker (PWA shell caching) if available
+  if ('serviceWorker' in navigator) {
+    try { await navigator.serviceWorker.register('/sw.js'); }
+    catch (err) { console.warn('SW registration failed:', err); }
+  }
   await loadTemplates();
   updateCharCounter();
 })();

@@ -417,8 +417,11 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-app.get('/api/sessions', (_req, res) => {
-  res.json(db.listSessions());
+app.get('/api/sessions', (req, res) => {
+  const archived = req.query.archived === 'true' ? true : (req.query.archived === 'false' ? false : null);
+  let list = db.listSessions();
+  if (archived !== null) list = list.filter(s => !!s.archived === archived);
+  res.json(list);
 });
 
 app.get('/api/search', (req, res) => {

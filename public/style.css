@@ -1365,6 +1365,15 @@ kbd {
   50% { box-shadow: 0 0 0 6px rgba(220, 53, 69, 0); }
 }
 
+/* ── Sidebar archive toggle ───────────────────────────────────────── */
+.sidebar-toolbar {
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--border-glass);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.archive-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+
 /* ── Sidebar import button ────────────────────────────────────────── */
 .import-btn {
   background: var(--bg-glass);

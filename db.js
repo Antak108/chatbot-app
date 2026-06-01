@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const sessionCrypto = require('./crypto');
 
 const DB_DIR = process.env.DB_DIR
   ? path.resolve(process.env.DB_DIR)
@@ -30,7 +31,7 @@ function generateId() {
 
 function atomicWriteSync(filepath, content) {
   const tmp = filepath + '.tmp';
-  fs.writeFileSync(tmp, content, 'utf-8');
+  fs.writeFileSync(tmp, sessionCrypto.maybeEnvelope(content), 'utf-8');
   fs.renameSync(tmp, filepath);
 }
 
@@ -40,7 +41,8 @@ function readSessionFile(id) {
     return null;
   }
   const raw = fs.readFileSync(filepath, 'utf-8');
-  return JSON.parse(raw);
+  const unwrapped = sessionCrypto.maybeUnwrap(raw);
+  return JSON.parse(unwrapped);
 }
 
 function listSessions() {
